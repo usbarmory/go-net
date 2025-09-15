@@ -10,7 +10,6 @@ import (
 	"errors"
 	"net"
 	"runtime"
-	"time"
 
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
