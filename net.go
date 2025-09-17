@@ -165,6 +165,9 @@ func (iface *Interface) Init(nic NetworkDevice, addr string, mac string, gateway
 	if len(mac) == 0 {
 		laddr = make([]byte, 6)
 		rand.Read(laddr)
+		// flag address as unicast and locally administered
+		laddr[0] &= 0xfe
+		laddr[0] |= 0x02
 	} else {
 		if laddr, err = net.ParseMAC(mac); err != nil {
 			return
