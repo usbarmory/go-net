@@ -26,7 +26,7 @@ _ = iface.Init(nic, "10.0.0.1/24", "", "10.0.0.2")
 net.SocketFunc = iface.Socket
 ```
 
-See [go-boot](https://github.com/usbarmory/go-boot/blob/main/cmd/net.go)
+See [go-boot](https://github.com/usbarmory/go-boot/blob/development/cmd/net.go)
 for a full integration example.
 
 Authors
