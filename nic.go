@@ -120,10 +120,10 @@ func (eth *NIC) Start() {
 	buf := make([]byte, MTU)
 
 	for {
-		runtime.Gosched()
-
 		if n, err := eth.Device.Receive(buf); err == nil && n > 0 {
 			eth.Rx(buf[0:n])
+		} else {
+			runtime.Gosched()
 		}
 	}
 }
