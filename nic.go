@@ -9,7 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
-	"runtime"
+	"time"
 
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -123,7 +123,7 @@ func (eth *NIC) Start() {
 		if n, err := eth.Device.Receive(buf); err == nil && n > 0 {
 			eth.Rx(buf[0:n])
 		} else {
-			runtime.Gosched()
+			time.Sleep(1 * time.Millisecond)
 		}
 	}
 }
