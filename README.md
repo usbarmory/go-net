@@ -27,7 +27,7 @@ net.SocketFunc = iface.Socket
 ```
 
 See [go-boot](https://github.com/usbarmory/go-boot/blob/development/cmd/net.go)
-for a full integration example.
+for a full integration example with the UEFI Simple Network Protocol.
 
 Authors
 =======
