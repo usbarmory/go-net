@@ -1,3 +1,8 @@
+// Copyright (c) The go-net authors. All Rights Reserved.
+//
+// Use of this source code is governed by the license
+// that can be found in the LICENSE file.
+
 package gnet
 
 import (
@@ -7,6 +12,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 	"syscall"
 
 	"gvisor.dev/gvisor/pkg/buffer"
@@ -14,28 +20,62 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
+	"gvisor.dev/gvisor/pkg/tcpip/network/arp"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/icmp"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
 )
 
-type netstack struct {
-	Stack *stack.Stack
-	Link  *channel.Endpoint
-	NIDID tcpip.NICID
+var _ Stack = (*GVisorStack)(nil)
+
+// NewGVisorStack returns a gvisor stack ready to configure with the given [tcpip.NICID].
+func NewGVisorStack(nicid tcpip.NICID) *GVisorStack {
+	return &GVisorStack{
+		NICID: nicid,
+	}
 }
 
-func (iface *netstack) NICID() uint32 {
-	return uint32(iface.NIDID)
+var (
+	// NICID represents the default gVisor NIC identifier
+	NICID = tcpip.NICID(1)
+	// DefaultStackOptions represents the default gVisor Stack configuration
+	DefaultStackOptions = stack.Options{
+		NetworkProtocols: []stack.NetworkProtocolFactory{
+			ipv4.NewProtocol,
+			arp.NewProtocol},
+		TransportProtocols: []stack.TransportProtocolFactory{
+			tcp.NewProtocol,
+			icmp.NewProtocol4,
+			udp.NewProtocol},
+	}
+)
+
+// GVisorStack implements [Stack] using the gvisor.dev/gvisor package.
+type GVisorStack struct {
+	Stack      *stack.Stack
+	Link       *channel.Endpoint
+	prevNotify *channel.NotificationHandle
+	NICID      tcpip.NICID
 }
 
-func (iface *netstack) configure(nicid uint32, mac string, ip netip.Prefix, gw netip.Addr) (err error) {
+// HardwareAddress implements [Stack].
+func (stack *GVisorStack) HardwareAddress() (net.HardwareAddr, error) {
+	addr := stack.Link.LinkAddress()
+	return net.HardwareAddr(addr), nil
+}
+
+// Configure implements [Stack].
+func (iface *GVisorStack) Configure(mac string, ip netip.Prefix, gw netip.Addr) (err error) {
 	linkAddr, err := tcpip.ParseMACAddress(mac)
 	if err != nil {
 		return
 	}
-	iface.NIDID = tcpip.NICID(nicid)
+	if iface.NICID == 0 {
+		iface.NICID = tcpip.NICID(NICID)
+	}
 	if iface.Stack == nil {
 		iface.Stack = stack.New(DefaultStackOptions)
 	}
@@ -45,7 +85,7 @@ func (iface *netstack) configure(nicid uint32, mac string, ip netip.Prefix, gw n
 
 	linkEP := stack.LinkEndpoint(iface.Link)
 
-	if err := iface.Stack.CreateNIC(iface.NIDID, linkEP); err != nil {
+	if err := iface.Stack.CreateNIC(iface.NICID, linkEP); err != nil {
 		return fmt.Errorf("%v", err)
 	}
 	addr := tcpip.AddressWithPrefix{
@@ -57,7 +97,7 @@ func (iface *netstack) configure(nicid uint32, mac string, ip netip.Prefix, gw n
 		AddressWithPrefix: addr,
 	}
 
-	if err := iface.Stack.AddProtocolAddress(iface.NIDID, protocolAddr, stack.AddressProperties{}); err != nil {
+	if err := iface.Stack.AddProtocolAddress(iface.NICID, protocolAddr, stack.AddressProperties{}); err != nil {
 		return fmt.Errorf("%v", err)
 	}
 
@@ -65,7 +105,7 @@ func (iface *netstack) configure(nicid uint32, mac string, ip netip.Prefix, gw n
 
 	rt = append(rt, tcpip.Route{
 		Destination: protocolAddr.AddressWithPrefix.Subnet(),
-		NIC:         iface.NIDID,
+		NIC:         iface.NICID,
 	})
 	var gwaddr tcpip.Address
 	if gw.IsValid() {
@@ -75,31 +115,30 @@ func (iface *netstack) configure(nicid uint32, mac string, ip netip.Prefix, gw n
 	rt = append(rt, tcpip.Route{
 		Destination: header.IPv4EmptySubnet,
 		Gateway:     gwaddr,
-		NIC:         iface.NIDID,
+		NIC:         iface.NICID,
 	})
 
 	iface.Stack.SetRouteTable(rt)
 	return nil
 }
 
-// EnableICMP adds an ICMP endpoint to the interface, it is useful to enable
-// ping requests.
-func (iface *netstack) EnableICMP() error {
+// EnableICMP implements [Stack].
+func (stack *GVisorStack) EnableICMP() error {
 	var wq waiter.Queue
 
-	ep, err := iface.Stack.NewEndpoint(icmp.ProtocolNumber4, ipv4.ProtocolNumber, &wq)
+	ep, err := stack.Stack.NewEndpoint(icmp.ProtocolNumber4, ipv4.ProtocolNumber, &wq)
 
 	if err != nil {
 		return fmt.Errorf("endpoint error (icmp): %v", err)
 	}
 
-	addr, tcpErr := iface.Stack.GetMainNICAddress(iface.NIDID, ipv4.ProtocolNumber)
+	addr, tcpErr := stack.Stack.GetMainNICAddress(stack.NICID, ipv4.ProtocolNumber)
 
 	if tcpErr != nil {
 		return fmt.Errorf("couldn't get NIC IP address: %v", tcpErr)
 	}
 
-	fullAddr := tcpip.FullAddress{Addr: addr.Address, Port: 0, NIC: iface.NIDID}
+	fullAddr := tcpip.FullAddress{Addr: addr.Address, Port: 0, NIC: stack.NICID}
 
 	if err := ep.Bind(fullAddr); err != nil {
 		return fmt.Errorf("bind error (icmp endpoint): ", err)
@@ -108,21 +147,20 @@ func (iface *netstack) EnableICMP() error {
 	return nil
 }
 
-// Socket can be used as net.SocketFunc under GOOS=tamago to allow its use
-// internal use within the Go runtime.
-func (iface *netstack) Socket(ctx context.Context, network string, family, sotype int, laddr, raddr net.Addr) (c interface{}, err error) {
+// Socket implements [Stack].
+func (stack *GVisorStack) Socket(ctx context.Context, network string, family, sotype int, laddr, raddr net.Addr) (c interface{}, err error) {
 	var proto tcpip.NetworkProtocolNumber
 	var lFullAddr tcpip.FullAddress
 	var rFullAddr tcpip.FullAddress
 
 	if laddr != nil {
-		if lFullAddr, err = fullAddr(laddr.String()); err != nil {
+		if lFullAddr, err = gvisorFullAddr(laddr.String()); err != nil {
 			return
 		}
 	}
 
 	if raddr != nil {
-		if rFullAddr, err = fullAddr(raddr.String()); err != nil {
+		if rFullAddr, err = gvisorFullAddr(raddr.String()); err != nil {
 			return
 		}
 	}
@@ -140,7 +178,7 @@ func (iface *netstack) Socket(ctx context.Context, network string, family, sotyp
 			return nil, errors.New("unsupported socket type")
 		}
 
-		if c, err = gonet.DialUDP(iface.Stack, &lFullAddr, &rFullAddr, proto); c != nil {
+		if c, err = gonet.DialUDP(stack.Stack, &lFullAddr, &rFullAddr, proto); c != nil {
 			return
 		}
 	case "tcp", "tcp4":
@@ -149,11 +187,11 @@ func (iface *netstack) Socket(ctx context.Context, network string, family, sotyp
 		}
 
 		if raddr != nil {
-			if c, err = gonet.DialContextTCP(ctx, iface.Stack, rFullAddr, proto); err != nil {
+			if c, err = gonet.DialContextTCP(ctx, stack.Stack, rFullAddr, proto); err != nil {
 				return
 			}
 		} else {
-			if c, err = gonet.ListenTCP(iface.Stack, lFullAddr, proto); err != nil {
+			if c, err = gonet.ListenTCP(stack.Stack, lFullAddr, proto); err != nil {
 				return
 			}
 		}
@@ -164,11 +202,22 @@ func (iface *netstack) Socket(ctx context.Context, network string, family, sotyp
 	return
 }
 
-func (iface *netstack) AddNotify(notifier writeNotifier) {
-	iface.Link.AddNotify(notifier)
+type writeNotifierFunc func()
+
+func (fn writeNotifierFunc) WriteNotify() {
+	fn()
 }
 
-func (iface *netstack) WriteOutboundPacket(buf []byte) (int, error) {
+// SetWriteNotify implements [Stack].
+func (stack *GVisorStack) SetWriteNotify(notifier func()) {
+	if stack.prevNotify != nil {
+		stack.Link.RemoveNotify(stack.prevNotify)
+	}
+	stack.prevNotify = stack.Link.AddNotify(writeNotifierFunc(notifier))
+}
+
+// WriteOutboundPacket implements [Stack].
+func (iface *GVisorStack) WriteOutboundPacket(buf []byte) (int, error) {
 	if len(buf) < int(iface.Link.MTU()+18) {
 		return 0, errors.New("too short buffer for writing outgoing packets (MTU limited)")
 	}
@@ -197,7 +246,8 @@ func (iface *netstack) WriteOutboundPacket(buf []byte) (int, error) {
 	return n, nil
 }
 
-func (iface *netstack) ReadInboundPacket(buf []byte) error {
+// RecvInboundPacket implements [Stack].
+func (iface *GVisorStack) RecvInboundPacket(buf []byte) error {
 	if len(buf) < 14 {
 		return nil
 	}
@@ -211,4 +261,22 @@ func (iface *netstack) ReadInboundPacket(buf []byte) error {
 	copy(pkt.LinkHeader().Push(len(hdr)), hdr)
 	iface.Link.InjectInbound(proto, pkt)
 	return nil
+}
+
+// gvisorFullAddr attempts to convert the ip:port to a FullAddress struct.
+func gvisorFullAddr(a string) (tcpip.FullAddress, error) {
+	var p int
+
+	host, port, err := net.SplitHostPort(a)
+
+	if err == nil {
+		if p, err = strconv.Atoi(port); err != nil {
+			return tcpip.FullAddress{}, err
+		}
+	} else {
+		host = a
+	}
+
+	addr := net.ParseIP(host)
+	return tcpip.FullAddress{Addr: tcpip.AddrFromSlice(addr.To4()), Port: uint16(p)}, nil
 }
