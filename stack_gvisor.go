@@ -141,7 +141,7 @@ func (stack *GVisorStack) EnableICMP() error {
 	fullAddr := tcpip.FullAddress{Addr: addr.Address, Port: 0, NIC: stack.NICID}
 
 	if err := ep.Bind(fullAddr); err != nil {
-		return fmt.Errorf("bind error (icmp endpoint): ", err)
+		return fmt.Errorf("bind error (icmp endpoint): %s", err)
 	}
 
 	return nil
@@ -177,29 +177,22 @@ func (stack *GVisorStack) Socket(ctx context.Context, network string, family, so
 		if sotype != syscall.SOCK_DGRAM {
 			return nil, errors.New("unsupported socket type")
 		}
-
-		if c, err = gonet.DialUDP(stack.Stack, &lFullAddr, &rFullAddr, proto); c != nil {
-			return
-		}
+		c, err = gonet.DialUDP(stack.Stack, &lFullAddr, &rFullAddr, proto)
 	case "tcp", "tcp4":
 		if sotype != syscall.SOCK_STREAM {
 			return nil, errors.New("unsupported socket type")
 		}
 
 		if raddr != nil {
-			if c, err = gonet.DialContextTCP(ctx, stack.Stack, rFullAddr, proto); err != nil {
-				return
-			}
+			c, err = gonet.DialContextTCP(ctx, stack.Stack, rFullAddr, proto)
 		} else {
-			if c, err = gonet.ListenTCP(stack.Stack, lFullAddr, proto); err != nil {
-				return
-			}
+			c, err = gonet.ListenTCP(stack.Stack, lFullAddr, proto)
 		}
 	default:
 		return nil, errors.New("unsupported network")
 	}
 
-	return
+	return c, err
 }
 
 type writeNotifierFunc func()
