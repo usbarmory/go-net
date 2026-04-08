@@ -29,6 +29,7 @@ import (
 	"gvisor.dev/gvisor/pkg/waiter"
 )
 
+// Compile time check to ensure GVisorStack implements Stack interface.
 var _ Stack = (*GVisorStack)(nil)
 
 // NewGVisorStack returns a gvisor stack ready to configure with the given [tcpip.NICID].
