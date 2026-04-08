@@ -38,6 +38,9 @@ andrea@inversepath.com
 Andrej Rosano  
 andrej@inversepath.com  
 
+Patricio Whittingslow
+graded.sp{at}gmail{dot}com
+
 Documentation
 =============
 

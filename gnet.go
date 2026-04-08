@@ -55,6 +55,12 @@ type Stack interface {
 	RecvInboundPacket(buf []byte) error
 }
 
+// NewDefaultStack returns a ready-to-use [Stack] implementation as defined by
+// build tags being used.
+func NewDefaultStack() Stack {
+	return newDefaultStack()
+}
+
 // Interface bridges a [Stack] and a [NetworkDevice], driving
 // packet I/O between them. HandleStackErr, if non-nil, is called
 // on stack errors during TX (tx=true) or RX (tx=false).
