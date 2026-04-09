@@ -16,14 +16,17 @@ The interface TCP/IP stack can be attached to the Go runtime by setting
 // TamaGo UEFI Simple Network interface
 nic, _ := &x64.UEFI.Boot.GetNetwork{}
 
-// gnet interface
-iface := gnet.Interface{}
+// Create IP/TCP networking stack.
+netstack := gnet.NewDefaultStack()
 
-// initialize IP, MAC, Gateway
-_ = iface.Init(nic, "10.0.0.1/24", "", "10.0.0.2")
+// Bridge NIC with networking stack with gnet interface type
+// and give interface IP, MAC, Gateway.
+var iface gnet.Interface
+_ = iface.Init(nic, netstack, addr, mac, gateway)
+go iface.StartRx()
 
 // Go runtime hook
-net.SocketFunc = iface.Socket
+net.SocketFunc = netstack.Socket
 ```
 
 See [go-boot](https://github.com/usbarmory/go-boot/blob/development/cmd/net.go)
