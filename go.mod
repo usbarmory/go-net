@@ -2,7 +2,10 @@ module github.com/usbarmory/go-net
 
 go 1.25.1
 
-require gvisor.dev/gvisor v0.0.0-20250911055229-61a46406f068
+require (
+	github.com/soypat/lneto v0.0.0-20260413204931-191b8ee4cc37
+	gvisor.dev/gvisor v0.0.0-20250911055229-61a46406f068
+)
 
 require (
 	github.com/google/btree v1.1.2 // indirect
