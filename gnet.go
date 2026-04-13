@@ -24,9 +24,14 @@ import (
 )
 
 const (
-	// MTU represents the Ethernet Maximum Transmission Unit.
-	MTU    = 1518
-	hdrLen = 14
+	// MTU represents the Maximum Transmission Unit.
+	MTU = 1500
+
+	// EthernetMinimumSize is the minimum size of a valid ethernet frame.
+	EthernetMinimumSize = 14
+
+	// EthernetMaximumSize is the maximum size of a valid ethernet frame.
+	EthernetMaximumSize = 18
 )
 
 // NetworkDevice represents a generic network device interface capable of
@@ -123,7 +128,7 @@ func (iface *Interface) Init(nic NetworkDevice, addr string, mac string, gateway
 // through [NetworkDevice.Receive] and handles them through
 // [Stack.RecvInboundPacket], it should never return.
 func (iface *Interface) Start() {
-	buf := make([]byte, MTU)
+	buf := make([]byte, MTU+EthernetMaximumSize)
 
 	for {
 		n, err := iface.rx(buf)
@@ -143,7 +148,7 @@ func (iface *Interface) tx(buf []byte) (n int, err error) {
 		return
 	}
 
-	if n < hdrLen {
+	if n < EthernetMinimumSize {
 		return 0, nil
 	}
 
@@ -167,5 +172,5 @@ func (iface *Interface) rx(buf []byte) (n int, err error) {
 }
 
 func (iface *Interface) notifyTx() {
-	iface.tx(make([]byte, MTU+18)) // FIXME: why +18 ?
+	iface.tx(make([]byte, MTU+EthernetMaximumSize))
 }

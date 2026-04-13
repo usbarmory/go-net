@@ -219,13 +219,13 @@ func (stack *GVisorStack) SetWriteNotify(notifier func()) {
 func (iface *GVisorStack) WriteOutboundPacket(buf []byte) (int, error) {
 	var pkt *stack.PacketBuffer
 
-	if len(buf) < int(iface.Link.MTU()+18) {
+	if len(buf) < int(iface.Link.MTU()+EthernetMaximumSize) {
 		return 0, errors.New("too short buffer for writing outgoing packets (MTU limited)")
 	}
 
 	if pkt = iface.Link.Read(); pkt == nil {
 		return 0, nil
-	} else if pkt.Data().Size()+hdrLen > len(buf) {
+	} else if pkt.Data().Size()+EthernetMinimumSize > len(buf) {
 		return 0, errors.New("outgoing packet exceeds MTU")
 	}
 
@@ -249,13 +249,15 @@ func (iface *GVisorStack) WriteOutboundPacket(buf []byte) (int, error) {
 
 // RecvInboundPacket implements [Stack.RecvInboundPacket].
 func (iface *GVisorStack) RecvInboundPacket(buf []byte) error {
+	hdrLen := EthernetMinimumSize
+
 	if len(buf) < hdrLen {
 		return nil
 	}
 
 	hdr := buf[0:hdrLen]
 	proto := tcpip.NetworkProtocolNumber(binary.BigEndian.Uint16(buf[hdrLen-2 : hdrLen]))
-	payload := buf[hdrLen:]
+	payload := buf[EthernetMinimumSize:]
 
 	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		ReserveHeaderBytes: len(hdr),
