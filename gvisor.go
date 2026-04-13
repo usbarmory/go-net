@@ -29,19 +29,10 @@ import (
 	"gvisor.dev/gvisor/pkg/waiter"
 )
 
-// Compile time check to ensure GVisorStack implements Stack interface.
-var _ Stack = (*GVisorStack)(nil)
-
-// NewGVisorStack returns a gvisor stack ready to configure with the given [tcpip.NICID].
-func NewGVisorStack(nicid tcpip.NICID) *GVisorStack {
-	return &GVisorStack{
-		NICID: nicid,
-	}
-}
-
 var (
 	// NICID represents the default gVisor NIC identifier
 	NICID = tcpip.NICID(1)
+
 	// DefaultStackOptions represents the default gVisor Stack configuration
 	DefaultStackOptions = stack.Options{
 		NetworkProtocols: []stack.NetworkProtocolFactory{
@@ -62,21 +53,31 @@ type GVisorStack struct {
 	NICID      tcpip.NICID
 }
 
-// HardwareAddress implements [Stack].
+// NewGVisorStack returns a gvisor stack ready to configure with the given [tcpip.NICID].
+func NewGVisorStack(nicid tcpip.NICID) *GVisorStack {
+	return &GVisorStack{
+		NICID: nicid,
+	}
+}
+
+// HardwareAddress implements [Stack.HardwareAddress].
 func (stack *GVisorStack) HardwareAddress() (net.HardwareAddr, error) {
 	addr := stack.Link.LinkAddress()
 	return net.HardwareAddr(addr), nil
 }
 
-// Configure implements [Stack].
+// Configure implements [Stack.Configure].
 func (iface *GVisorStack) Configure(mac string, ip netip.Prefix, gw netip.Addr) (err error) {
 	linkAddr, err := tcpip.ParseMACAddress(mac)
+
 	if err != nil {
 		return
 	}
+
 	if iface.NICID == 0 {
 		iface.NICID = tcpip.NICID(NICID)
 	}
+
 	if iface.Stack == nil {
 		iface.Stack = stack.New(DefaultStackOptions)
 	}
@@ -89,10 +90,12 @@ func (iface *GVisorStack) Configure(mac string, ip netip.Prefix, gw netip.Addr) 
 	if err := iface.Stack.CreateNIC(iface.NICID, linkEP); err != nil {
 		return fmt.Errorf("%v", err)
 	}
+
 	addr := tcpip.AddressWithPrefix{
 		Address:   tcpip.AddrFromSlice(ip.Addr().AsSlice()),
 		PrefixLen: ip.Bits(),
 	}
+
 	protocolAddr := tcpip.ProtocolAddress{
 		Protocol:          ipv4.ProtocolNumber,
 		AddressWithPrefix: addr,
@@ -103,12 +106,13 @@ func (iface *GVisorStack) Configure(mac string, ip netip.Prefix, gw netip.Addr) 
 	}
 
 	rt := iface.Stack.GetRouteTable()
-
 	rt = append(rt, tcpip.Route{
 		Destination: protocolAddr.AddressWithPrefix.Subnet(),
 		NIC:         iface.NICID,
 	})
+
 	var gwaddr tcpip.Address
+
 	if gw.IsValid() {
 		gwaddr = tcpip.AddrFromSlice(net.ParseIP(gw.String())).To4()
 	}
@@ -120,6 +124,7 @@ func (iface *GVisorStack) Configure(mac string, ip netip.Prefix, gw netip.Addr) 
 	})
 
 	iface.Stack.SetRouteTable(rt)
+
 	return nil
 }
 
@@ -148,7 +153,7 @@ func (stack *GVisorStack) EnableICMP() error {
 	return nil
 }
 
-// Socket implements [Stack].
+// Socket implements [Stack.Socket].
 func (stack *GVisorStack) Socket(ctx context.Context, network string, family, sotype int, laddr, raddr net.Addr) (c interface{}, err error) {
 	var proto tcpip.NetworkProtocolNumber
 	var lFullAddr tcpip.FullAddress
@@ -202,7 +207,7 @@ func (fn writeNotifierFunc) WriteNotify() {
 	fn()
 }
 
-// SetWriteNotify implements [Stack].
+// SetWriteNotify implements [Stack.SetWriteNotify].
 func (stack *GVisorStack) SetWriteNotify(notifier func()) {
 	if stack.prevNotify != nil {
 		stack.Link.RemoveNotify(stack.prevNotify)
@@ -210,50 +215,56 @@ func (stack *GVisorStack) SetWriteNotify(notifier func()) {
 	stack.prevNotify = stack.Link.AddNotify(writeNotifierFunc(notifier))
 }
 
-// WriteOutboundPacket implements [Stack].
+// WriteOutboundPacket implements [Stack.WriteOutboundPacket].
 func (iface *GVisorStack) WriteOutboundPacket(buf []byte) (int, error) {
+	var pkt *stack.PacketBuffer
+
 	if len(buf) < int(iface.Link.MTU()+18) {
 		return 0, errors.New("too short buffer for writing outgoing packets (MTU limited)")
 	}
-	var pkt *stack.PacketBuffer
+
 	if pkt = iface.Link.Read(); pkt == nil {
 		return 0, nil
-	} else if pkt.Data().Size()+14 > len(buf) {
+	} else if pkt.Data().Size()+hdrLen > len(buf) {
 		return 0, errors.New("outgoing packet exceeds MTU")
 	}
 
-	proto := make([]byte, 2)
-	binary.BigEndian.PutUint16(proto, uint16(pkt.NetworkProtocolNumber))
-
-	// Ethernet frame header
 	mac := iface.Link.LinkAddress()
 	n := copy(buf, pkt.EgressRoute.RemoteLinkAddress)
 	n += copy(buf[n:], mac)
+
 	binary.BigEndian.PutUint16(buf[n:], uint16(pkt.NetworkProtocolNumber))
 	n += 2
+
 	for _, v := range pkt.AsSlices() {
 		if n+len(v) > len(buf) {
 			return 0, errors.New("bad packet size calculation- exceeds MTU size")
 		}
+
 		n += copy(buf[n:], v)
 	}
+
 	return n, nil
 }
 
-// RecvInboundPacket implements [Stack].
+// RecvInboundPacket implements [Stack.RecvInboundPacket].
 func (iface *GVisorStack) RecvInboundPacket(buf []byte) error {
-	if len(buf) < 14 {
+	if len(buf) < hdrLen {
 		return nil
 	}
-	hdr := buf[0:14]
-	proto := tcpip.NetworkProtocolNumber(binary.BigEndian.Uint16(buf[12:14]))
-	payload := buf[14:]
+
+	hdr := buf[0:hdrLen]
+	proto := tcpip.NetworkProtocolNumber(binary.BigEndian.Uint16(buf[hdrLen-2 : hdrLen]))
+	payload := buf[hdrLen:]
+
 	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		ReserveHeaderBytes: len(hdr),
 		Payload:            buffer.MakeWithData(payload),
 	})
+
 	copy(pkt.LinkHeader().Push(len(hdr)), hdr)
 	iface.Link.InjectInbound(proto, pkt)
+
 	return nil
 }
 

@@ -4,11 +4,12 @@
 // that can be found in the LICENSE file.
 
 // Package gnet implements TCP/IP connectivity through a generic
-// [NetworkDevice] interface.
+// [NetworkDevice] interface and TCP/IP [Stack].
 //
-// The TCP/IP stack is implemented using gVisor pure Go implementation.
+// The package provides [GVisorStack] as pure Go [Stack] implementation using
+// gVisor.
 //
-// This package is only meant to be used with `GOOS=tamago` as
+// This package is designed for, but not limited to, use with `GOOS=tamago` as
 // supported by the TamaGo framework for bare metal Go, see
 // https://github.com/usbarmory/tamago.
 package gnet
@@ -16,14 +17,16 @@ package gnet
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"net"
 	"net/netip"
 	"runtime"
 )
 
-var (
+const (
 	// MTU represents the Ethernet Maximum Transmission Unit.
-	MTU uint32 = 1518
+	MTU    = 1518
+	hdrLen = 14
 )
 
 // NetworkDevice represents a generic network device interface capable of
@@ -55,32 +58,35 @@ type Stack interface {
 	RecvInboundPacket(buf []byte) error
 }
 
-// NewDefaultStack returns a ready-to-use [Stack] implementation as defined by
-// build tags being used.
-func NewDefaultStack() Stack {
-	return newDefaultStack()
-}
-
-// Interface bridges a [Stack] and a [NetworkDevice], driving
-// packet I/O between them. HandleStackErr, if non-nil, is called
-// on stack errors during TX (tx=true) or RX (tx=false).
+// Interface bridges a [Stack] and a [NetworkDevice], driving packet I/O
+// between them.
 type Interface struct {
-	netstack       Stack
-	nic            NetworkDevice
+	// Stack represents a [Stack] instance.
+	Stack Stack
+	// HandleStackErr defines an optional function to handle [Stack]
+	// errors.
 	HandleStackErr func(err error, tx bool)
+
+	nic NetworkDevice
 }
 
-// NetworkingStack returns the [Stack] with which the interface was created with.
-func (iface *Interface) NetworkingStack() Stack {
-	return iface.netstack
-}
-
-// Init initializes the interface with a [NetworkDevice] and [Stack], bridging the two.
-// The Stack is also configured with the CIDR address and hardware (MAC) address.
-// Gateway may or may not be provided. If MAC is empty it will be set to a random address.
-func (iface *Interface) Init(nic NetworkDevice, stack Stack, addr string, mac string, gateway string) (err error) {
+// Init initializes the interface with a [NetworkDevice], bridging it with a
+// [Stack].
+//
+// If [Stack] is not set a default implementation is initialized, the stack is
+// configured with the CIDR address and hardware (MAC) address.
+//
+// The gateway may or may not be provided, if MAC is empty it will be set to a
+// random address.
+func (iface *Interface) Init(nic NetworkDevice, addr string, mac string, gateway string) (err error) {
 	var laddr net.HardwareAddr
+
+	if nic == nil {
+		return errors.New("invalid nic")
+	}
+
 	pfx, err := netip.ParsePrefix(addr)
+
 	if err != nil {
 		return err
 	}
@@ -97,59 +103,69 @@ func (iface *Interface) Init(nic NetworkDevice, stack Stack, addr string, mac st
 		}
 	}
 
+	if iface.Stack == nil {
+		iface.Stack = NewGVisorStack(1)
+	}
+
 	gwaddr, _ := netip.ParseAddr(gateway)
-	err = stack.Configure(laddr.String(), pfx, gwaddr)
-	if err != nil {
+
+	if err = iface.Stack.Configure(laddr.String(), pfx, gwaddr); err != nil {
 		return err
 	}
-	stack.SetWriteNotify(iface.doTx)
+
+	iface.Stack.SetWriteNotify(iface.notifyTx)
 	iface.nic = nic
-	iface.netstack = stack
-	return nil
+
+	return
 }
 
-// StartRx begins processing of incoming packets, the function receives packets
-// through [NetworkDevice.Receive] and handles them through [NIC.Rx], it should
-// never return.
-func (iface *Interface) StartRx() {
+// Start begins processing of incoming packets, the function receives packets
+// through [NetworkDevice.Receive] and handles them through
+// [Stack.RecvInboundPacket], it should never return.
+func (iface *Interface) Start() {
 	buf := make([]byte, MTU)
+
 	for {
-		n, err := iface.singleRx(buf)
-		if err == nil && n > 0 {
+		n, err := iface.rx(buf)
+
+		if err != nil || n == 0 {
 			runtime.Gosched()
 		}
 	}
 }
 
-func (iface *Interface) singleTx(buf []byte) (int, error) {
-	n, err := iface.netstack.WriteOutboundPacket(buf)
-	if err != nil {
+func (iface *Interface) tx(buf []byte) (n int, err error) {
+	if n, err = iface.Stack.WriteOutboundPacket(buf); err != nil {
 		if iface.HandleStackErr != nil {
 			iface.HandleStackErr(err, true)
 		}
-		return 0, err
-	} else if n < 14 {
+
+		return
+	}
+
+	if n < hdrLen {
 		return 0, nil
 	}
-	err = iface.nic.Transmit(buf[:n])
-	if err != nil {
-		return 0, err
-	}
-	return n, nil
+
+	return n, iface.nic.Transmit(buf[:n])
 }
 
-func (iface *Interface) singleRx(buf []byte) (int, error) {
-	n, err := iface.nic.Receive(buf)
-	if err != nil {
-		return 0, err
+func (iface *Interface) rx(buf []byte) (n int, err error) {
+	n, err = iface.nic.Receive(buf)
+
+	if n == 0 || err != nil {
+		return
 	}
-	err = iface.netstack.RecvInboundPacket(buf[:n])
-	if err != nil && iface.HandleStackErr != nil {
-		iface.HandleStackErr(err, false)
+
+	if err = iface.Stack.RecvInboundPacket(buf[:n]); err != nil {
+		if iface.HandleStackErr != nil {
+			iface.HandleStackErr(err, false)
+		}
 	}
-	return n, err
+
+	return
 }
 
-func (iface *Interface) doTx() {
-	iface.singleTx(make([]byte, MTU+18))
+func (iface *Interface) notifyTx() {
+	iface.tx(make([]byte, MTU+18)) // FIXME: why +18 ?
 }

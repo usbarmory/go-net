@@ -6,42 +6,69 @@
 package gnet
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
+	"fmt"
 	"net"
+	"syscall"
+	"testing"
 )
 
-func ExampleInterface() {
+const arpRequest = `ffffffffffffaabbccddeeff08060001080006040001aabbccddeeff0a0000010000000000000a000003`
+
+type DummyNIC struct {
+	buf []byte
+}
+
+func (d *DummyNIC) Receive(buf []byte) (n int, err error) {
+	return
+}
+
+func (d *DummyNIC) Transmit(buf []byte) (err error) {
+	d.buf = buf
+	fmt.Printf("tx (%d bytes): %x\n", len(buf), buf)
+	return
+}
+
+func TestGVisorStack(t *testing.T) {
 	const (
 		addr    = "10.0.0.1/24"
 		gateway = "10.0.0.2"
-		mac     = ""
+		mac     = "aa:bb:cc:dd:ee:ff"
 
 		remoteAddr = "10.0.0.3"
 		remotePort = 80
-
-		sockStream = 0x1
-		sockDgram  = 0x2
-		familyInet = 0x1
 	)
-	var nic NetworkDevice = nil // Need a device implementation.
-	netstack := NewDefaultStack()
 
-	var iface Interface
-	err := iface.Init(nic, netstack, addr, mac, gateway)
+	payload, err := hex.DecodeString(arpRequest)
+
 	if err != nil {
+		t.Fatal(err)
+	}
+
+	iface := &Interface{
+		Stack: NewGVisorStack(1),
+	}
+
+	nic := &DummyNIC{}
+
+	if err := iface.Init(nic, addr, mac, gateway); err != nil {
 		panic(err)
 	}
-	go iface.StartRx()
 
 	raddr := &net.TCPAddr{
 		IP:   net.ParseIP(remoteAddr),
 		Port: remotePort,
 	}
-	c, err := netstack.Socket(context.Background(), "tcp", familyInet, sockStream, nil, raddr)
-	if err != nil {
-		panic(err)
+
+	_, err = iface.Stack.Socket(context.Background(), "tcp", syscall.AF_INET, syscall.SOCK_STREAM, nil, raddr)
+
+	if !bytes.Equal(nic.buf, payload) {
+		t.Errorf("tx payload mismatch:\n  %x\n  %x", nic.buf, payload)
 	}
-	conn := c.(net.Conn)
-	// Use conn...
-	conn.Close()
+
+	if err.Error() != "connect tcp 10.0.0.3:80: no route to host" {
+		t.Errorf("unexpected error, %v", err.Error())
+	}
 }
