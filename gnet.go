@@ -48,7 +48,7 @@ type NetworkDevice interface {
 type Stack interface {
 	// Configure sets the NIC ID, MAC address, IP prefix and gateway.
 	// Gateway may be invalid.
-	Configure(mac string, ip netip.Prefix, gw netip.Addr) error
+	Configure(mac net.HardwareAddr, ip netip.Prefix, gw netip.Addr) error
 	// HardwareAddress returns the MAC address of the NIC.
 	HardwareAddress() (net.HardwareAddr, error)
 	// EnableICMP registers an ICMP handler on the stack.
@@ -114,7 +114,7 @@ func (iface *Interface) Init(nic NetworkDevice, addr string, mac string, gateway
 
 	gwaddr, _ := netip.ParseAddr(gateway)
 
-	if err = iface.Stack.Configure(laddr.String(), pfx, gwaddr); err != nil {
+	if err = iface.Stack.Configure(laddr, pfx, gwaddr); err != nil {
 		return err
 	}
 
