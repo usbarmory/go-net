@@ -5,12 +5,21 @@ This Go package implements TCP/IP connectivity through a generic network
 interface to be used with `GOOS=tamago` as supported by the
 [TamaGo](https://github.com/usbarmory/tamago) framework for bare metal Go.
 
-The package supports TCP/IP networking through gVisor (`go` branch)
-[tcpip](https://pkg.go.dev/gvisor.dev/gvisor/pkg/tcpip)
-stack pure Go implementation.
+The package bridges generic network device and stack interfaces, which on
+`GOOS=tamago` can be attached to the Go runtime by setting `net.SocketFunc` to
+the interface `Socket` function.
 
-The interface TCP/IP stack can be attached to the Go runtime by setting
-`net.SocketFunc` to the interface `Socket` function:
+Support for the following pure Go network stacks is provided:
+
+  * [gVisor](https://github.com/usbarmory/go-net/blob/main/gvisor.go) (`go` branch) [tcpip](https://pkg.go.dev/gvisor.dev/gvisor/pkg/tcpip) stack.
+
+Support for the following network devices is provided:
+
+  * [uefi](https://github.com/usbarmory/go-boot/blob/main/uefi/net.go) through [go-boot](https://github.com/usbarmory/go-boot/) [Simple Network driver](https://pkg.go.dev/github.com/usbarmory/go-bootuefi#SimpleNetwork)
+  * [virtio](https://github.com/usbarmory/go-net/blob/main/virtio) network device through tamago [VirtIO driver](https://pkg.go.dev/github.com/usbarmory/tamago/kvm/virtio)
+
+Example
+=======
 
 ```go
 // TamaGo UEFI Simple Network interface
