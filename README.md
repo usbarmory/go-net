@@ -18,8 +18,8 @@ Support for the following network devices is provided:
   * [uefi](https://github.com/usbarmory/go-boot/blob/main/uefi/net.go) through [go-boot](https://github.com/usbarmory/go-boot/) [Simple Network driver](https://pkg.go.dev/github.com/usbarmory/go-bootuefi#SimpleNetwork)
   * [virtio](https://github.com/usbarmory/go-net/blob/main/virtio) network device through tamago [VirtIO driver](https://pkg.go.dev/github.com/usbarmory/tamago/kvm/virtio)
 
-Example
-=======
+Examples
+========
 
 ```go
 // TamaGo UEFI Simple Network interface
@@ -37,8 +37,19 @@ _ = iface.Init(nic, "10.0.0.1/24", "", "10.0.0.2")
 net.SocketFunc = iface.Stack.Socket
 ```
 
-See [go-boot](https://github.com/usbarmory/go-boot/blob/development/cmd/net.go)
+UEFI
+----
+
+See [go-boot](https://github.com/usbarmory/go-boot/blob/main/cmd/net.go)
 for a full integration example with the UEFI Simple Network Protocol.
+
+
+VirtIO
+------
+
+See [tamago-sev-example](https://github.com/usbarmory/tamago-sev-example/blob/main/cmd/net_virtio.go) or
+[tamago-example](https://github.com/usbarmory/tamago-example/tree/master/network)
+for a full integration example.
 
 Authors
 =======
