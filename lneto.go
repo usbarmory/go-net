@@ -33,18 +33,20 @@ type LnetoConfig struct {
 
 	// determine size of each TCP rx/tx ring buffers.
 	TCPBufferSize int
-	// PollDuration sets the time between protocol checks for completion like DHCP, NTP, DNS etc. via the blocking APIs.
-	PollDuration time.Duration
+	// BackoffStack sets the time between protocol checks for completion like DHCP, NTP, DNS etc. via the blocking APIs.
+	BackoffStack lneto.BackoffStrategy
 	// TCPQueueSize sets the number of packets that can be sent out and not be acknowledged before halting new packet tx.
 	TCPQueueSize int
 }
 
 func DefaultLnetoStackConfig() LnetoConfig {
+	const tcpMaxSize = MTU - 20 - 20 // Do not consider IP+TCP headers.
 	return LnetoConfig{
-		MaxActiveTCPPorts: 1024,
-		MaxListenerConns:  32, // Careful with number, large memory impact.
-		TCPBufferSize:     2048,
-		PollDuration:      time.Millisecond,
+		MaxActiveTCPPorts: 16,
+		MaxListenerConns:  32,             // Careful with number, large memory impact.
+		TCPBufferSize:     3 * tcpMaxSize, // 3× seems to work good on cyw43439.
+		TCPQueueSize:      8,
+		BackoffStack:      defaultStackBackoff,
 	}
 }
 
@@ -53,14 +55,11 @@ func NewLnetoStack(hostname string, cfg LnetoConfig) *LnetoStack {
 	if hostname == "" {
 		hostname = "gonet-lneto"
 	}
-	if cfg.PollDuration <= 0 {
-		cfg.PollDuration = time.Nanosecond
-	}
 	return &LnetoStack{
 		hostname:         hostname,
 		maxTCPPorts:      cfg.MaxActiveTCPPorts,
 		maxListenerConns: cfg.MaxListenerConns,
-		pollDuration:     cfg.PollDuration,
+		backoff:          cfg.BackoffStack,
 		tcpBufSize:       cfg.TCPBufferSize,
 		tcpQueueSize:     cfg.TCPQueueSize,
 	}
@@ -73,8 +72,8 @@ type LnetoStack struct {
 	hostname         string
 	maxTCPPorts      uint16
 	maxListenerConns uint16
-	pollDuration     time.Duration // Determine poll duration for blocking operations.
-	tcpBufSize       int           // determine size of TCP rx/tx ring buffers.
+	backoff          lneto.BackoffStrategy // Determine poll duration for blocking operations.
+	tcpBufSize       int                   // determine size of TCP rx/tx ring buffers.
 	tcpQueueSize     int
 	stack            xnet.StackAsync
 	// gostack holds a handle to xnet.StackAsync, it is just a wrapper type.
@@ -110,7 +109,7 @@ func (ls *LnetoStack) Configure(mac net.HardwareAddr, ip netip.Prefix, gw netip.
 	stack.AssimilateDHCPResults(&hostCtl)
 
 	// Prepare socket stack.
-	ls.gostack = stack.StackGo(ls.pollDuration, xnet.StackGoConfig{
+	ls.gostack = stack.StackGo(ls.backoff, xnet.StackGoConfig{
 		ListenerPoolConfig: xnet.TCPPoolConfig{
 			PoolSize:           ls.maxTCPPorts,
 			QueueSize:          ls.tcpQueueSize,
@@ -124,7 +123,7 @@ func (ls *LnetoStack) Configure(mac net.HardwareAddr, ip netip.Prefix, gw netip.
 	if gw.IsValid() {
 		// We need to discover gateway IP address.
 		go func(gw netip.Addr) {
-			blocking := stack.StackBlocking(ls.pollDuration)
+			blocking := stack.StackBlocking(ls.backoff)
 			hw, err := blocking.DoResolveHardwareAddress6(gw, 5*time.Second)
 			if err != nil {
 				fmt.Printf("failed to resolve hardware address for %s: %v\n", gw.String(), err)
@@ -172,4 +171,22 @@ func (ls *LnetoStack) RecvInboundPacket(buf []byte) error {
 		ls.writenotify()
 	}
 	return err
+}
+
+// defaultStackBackoff returns a backoff duration for stack protocol retry loops.
+// This strategy is meant for DHCP,NTP- not for stream protocols like TCP.
+func defaultStackBackoff(consecutiveBackoffs uint) time.Duration {
+	const (
+		// Stay in 32bit space for faster operations.
+		minWait = 100 * uint32(time.Microsecond)
+		maxWait = 20 * uint32(time.Millisecond)
+
+		maxShift       = 15
+		_overflowCheck = minWait << maxShift
+	)
+	sleep := minWait << min(consecutiveBackoffs, maxShift)
+	if sleep > maxWait {
+		sleep = maxWait
+	}
+	return time.Duration(sleep)
 }
