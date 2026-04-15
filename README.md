@@ -13,10 +13,16 @@ Support for the following pure Go network stacks is provided:
 
   * [gVisor](https://github.com/usbarmory/go-net/blob/main/gvisor.go) (`go` branch) [tcpip](https://pkg.go.dev/gvisor.dev/gvisor/pkg/tcpip) stack.
 
-Support for the following network devices is provided:
+The following packages provide compatible network devices:
 
-  * [uefi](https://github.com/usbarmory/go-boot/blob/main/uefi/net.go) through [go-boot](https://github.com/usbarmory/go-boot/) [Simple Network driver](https://pkg.go.dev/github.com/usbarmory/go-bootuefi#SimpleNetwork)
-  * [virtio](https://github.com/usbarmory/go-net/blob/main/virtio) network device through tamago [VirtIO driver](https://pkg.go.dev/github.com/usbarmory/tamago/kvm/virtio)
+  * [enet](https://pkg.go.dev/github.com/usbarmory/tamago/soc/nxp/enet): NXP ENET Ethernet controllers
+  * [uefi](https://pkg.go.dev/github.com/usbarmory/go-boot/uefi#SimpleNetwork): UEFI Simple Network
+  * [vnet](https://pkg.go.dev/github.com/usbarmory/go-net/virtio): VirtIO network device through tamago [virtio](https://pkg.go.dev/github.com/usbarmory/tamago/kvm/virtio)
+
+Package documentation
+=====================
+
+[![Go Reference](https://pkg.go.dev/badge/github.com/usbarmory/go-net.svg)](https://pkg.go.dev/github.com/usbarmory/go-net)
 
 Examples
 ========
@@ -36,6 +42,13 @@ _ = iface.Init(nic, "10.0.0.1/24", "", "10.0.0.2")
 // Go runtime hook
 net.SocketFunc = iface.Stack.Socket
 ```
+
+NXP ENET
+--------
+
+See `mx6ullevk` and `imx8mpevk` target support in
+[tamago-example](https://github.com/usbarmory/tamago-example/tree/master/network)
+for a full integration example.
 
 UEFI
 ----
