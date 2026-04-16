@@ -3,7 +3,7 @@ module github.com/usbarmory/go-net
 go 1.25.1
 
 require (
-	github.com/soypat/lneto v0.0.0-20260415000502-16c2c3de36a2
+	github.com/soypat/lneto v0.1.0
 	gvisor.dev/gvisor v0.0.0-20250911055229-61a46406f068
 )
 
