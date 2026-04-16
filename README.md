@@ -15,8 +15,9 @@ Support for the following pure Go network stacks is provided:
 
 The following packages provide compatible network devices:
 
-  * [enet](https://pkg.go.dev/github.com/usbarmory/tamago/soc/nxp/enet): NXP ENET Ethernet controllers
+  * [enet](https://pkg.go.dev/github.com/usbarmory/tamago/soc/nxp/enet): NXP i.MX ENET Ethernet controllers
   * [uefi](https://pkg.go.dev/github.com/usbarmory/go-boot/uefi#SimpleNetwork): UEFI Simple Network
+  * [usbnet](https://pkg.go.dev/github.com/usbarmory/go-net/imx-usb): Ethernet over NXP i.MX USB through tamago [nxp/usb](https://pkg.go.dev/github.com/usbarmory/tamago/soc/nxp/usb)
   * [vnet](https://pkg.go.dev/github.com/usbarmory/go-net/virtio): VirtIO network device through tamago [virtio](https://pkg.go.dev/github.com/usbarmory/tamago/kvm/virtio)
 
 Package documentation
@@ -43,13 +44,6 @@ _ = iface.Init(nic, "10.0.0.1/24", "", "10.0.0.2")
 net.SocketFunc = iface.Stack.Socket
 ```
 
-NXP ENET
---------
-
-See `mx6ullevk` and `imx8mpevk` target support in
-[tamago-example](https://github.com/usbarmory/tamago-example/tree/master/network)
-for a full integration example.
-
 UEFI
 ----
 
@@ -63,6 +57,13 @@ VirtIO
 See [tamago-sev-example](https://github.com/usbarmory/tamago-sev-example/blob/main/cmd/net_virtio.go) or
 [tamago-example](https://github.com/usbarmory/tamago-example/tree/master/network)
 for a full integration example.
+
+NXP i.MX ENET/USB
+-----------------
+
+See `mx6ullevk` and `imx8mpevk` (ENET) and `usbarmory` (USB) target support in
+[tamago-example](https://github.com/usbarmory/tamago-example/tree/master/network)
+for full integration examples.
 
 Authors
 =======
