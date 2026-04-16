@@ -17,7 +17,6 @@ package gnet
 import (
 	"context"
 	"crypto/rand"
-	"errors"
 	"net"
 	"net/netip"
 	"runtime"
@@ -76,7 +75,7 @@ type Interface struct {
 }
 
 // Init initializes the interface with a [NetworkDevice], bridging it with a
-// [Stack].
+// [Stack], the [NetworkDevice] argument can be omitted for manual stack usage.
 //
 // If [Stack] is not set a default implementation is initialized, the stack is
 // configured with the CIDR address and hardware (MAC) address.
@@ -85,10 +84,6 @@ type Interface struct {
 // random address.
 func (iface *Interface) Init(nic NetworkDevice, addr string, mac string, gateway string) (err error) {
 	var laddr net.HardwareAddr
-
-	if nic == nil {
-		return errors.New("invalid nic")
-	}
 
 	pfx, err := netip.ParsePrefix(addr)
 
@@ -118,8 +113,10 @@ func (iface *Interface) Init(nic NetworkDevice, addr string, mac string, gateway
 		return err
 	}
 
-	iface.Stack.SetWriteNotify(iface.notifyTx)
-	iface.nic = nic
+	if nic != nil {
+		iface.Stack.SetWriteNotify(iface.notifyTx)
+		iface.nic = nic
+	}
 
 	return
 }
@@ -129,6 +126,10 @@ func (iface *Interface) Init(nic NetworkDevice, addr string, mac string, gateway
 // [Stack.RecvInboundPacket], it should never return.
 func (iface *Interface) Start() {
 	buf := make([]byte, MTU+EthernetMaximumSize)
+
+	if iface.nic == nil {
+		return
+	}
 
 	for {
 		n, err := iface.rx(buf)
