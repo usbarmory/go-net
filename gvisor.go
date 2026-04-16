@@ -61,28 +61,29 @@ func NewGVisorStack(nicid tcpip.NICID) *GVisorStack {
 }
 
 // HardwareAddress implements [Stack.HardwareAddress].
-func (stack *GVisorStack) HardwareAddress() (net.HardwareAddr, error) {
-	addr := stack.Link.LinkAddress()
+func (g *GVisorStack) HardwareAddress() (net.HardwareAddr, error) {
+	addr := g.Link.LinkAddress()
 	return net.HardwareAddr(addr), nil
 }
 
 // Configure implements [Stack.Configure].
 func (iface *GVisorStack) Configure(mac net.HardwareAddr, ip netip.Prefix, gw netip.Addr) (err error) {
 	linkAddr := tcpip.LinkAddress(mac)
-	if iface.NICID == 0 {
-		iface.NICID = tcpip.NICID(NICID)
+
+	if g.NICID == 0 {
+		g.NICID = tcpip.NICID(NICID)
 	}
 
-	if iface.Stack == nil {
-		iface.Stack = stack.New(DefaultStackOptions)
+	if g.Stack == nil {
+		g.Stack = stack.New(DefaultStackOptions)
 	}
 
-	iface.Link = channel.New(256, MTU, linkAddr)
-	iface.Link.LinkEPCapabilities |= stack.CapabilityResolutionRequired
+	g.Link = channel.New(256, MTU, linkAddr)
+	g.Link.LinkEPCapabilities |= stack.CapabilityResolutionRequired
 
-	linkEP := stack.LinkEndpoint(iface.Link)
+	linkEP := stack.LinkEndpoint(g.Link)
 
-	if err := iface.Stack.CreateNIC(iface.NICID, linkEP); err != nil {
+	if err := g.Stack.CreateNIC(g.NICID, linkEP); err != nil {
 		return fmt.Errorf("%v", err)
 	}
 
@@ -96,14 +97,14 @@ func (iface *GVisorStack) Configure(mac net.HardwareAddr, ip netip.Prefix, gw ne
 		AddressWithPrefix: addr,
 	}
 
-	if err := iface.Stack.AddProtocolAddress(iface.NICID, protocolAddr, stack.AddressProperties{}); err != nil {
+	if err := g.Stack.AddProtocolAddress(g.NICID, protocolAddr, stack.AddressProperties{}); err != nil {
 		return fmt.Errorf("%v", err)
 	}
 
-	rt := iface.Stack.GetRouteTable()
+	rt := g.Stack.GetRouteTable()
 	rt = append(rt, tcpip.Route{
 		Destination: protocolAddr.AddressWithPrefix.Subnet(),
-		NIC:         iface.NICID,
+		NIC:         g.NICID,
 	})
 
 	var gwaddr tcpip.Address
@@ -115,31 +116,31 @@ func (iface *GVisorStack) Configure(mac net.HardwareAddr, ip netip.Prefix, gw ne
 	rt = append(rt, tcpip.Route{
 		Destination: header.IPv4EmptySubnet,
 		Gateway:     gwaddr,
-		NIC:         iface.NICID,
+		NIC:         g.NICID,
 	})
 
-	iface.Stack.SetRouteTable(rt)
+	g.Stack.SetRouteTable(rt)
 
 	return nil
 }
 
 // EnableICMP implements [Stack].
-func (stack *GVisorStack) EnableICMP() error {
+func (g *GVisorStack) EnableICMP() error {
 	var wq waiter.Queue
 
-	ep, err := stack.Stack.NewEndpoint(icmp.ProtocolNumber4, ipv4.ProtocolNumber, &wq)
+	ep, err := g.Stack.NewEndpoint(icmp.ProtocolNumber4, ipv4.ProtocolNumber, &wq)
 
 	if err != nil {
 		return fmt.Errorf("endpoint error (icmp): %v", err)
 	}
 
-	addr, tcpErr := stack.Stack.GetMainNICAddress(stack.NICID, ipv4.ProtocolNumber)
+	addr, tcpErr := g.Stack.GetMainNICAddress(g.NICID, ipv4.ProtocolNumber)
 
 	if tcpErr != nil {
 		return fmt.Errorf("couldn't get NIC IP address: %v", tcpErr)
 	}
 
-	fullAddr := tcpip.FullAddress{Addr: addr.Address, Port: 0, NIC: stack.NICID}
+	fullAddr := tcpip.FullAddress{Addr: addr.Address, Port: 0, NIC: g.NICID}
 
 	if err := ep.Bind(fullAddr); err != nil {
 		return fmt.Errorf("bind error (icmp endpoint): %s", err)
@@ -149,7 +150,7 @@ func (stack *GVisorStack) EnableICMP() error {
 }
 
 // Socket implements [Stack.Socket].
-func (stack *GVisorStack) Socket(ctx context.Context, network string, family, sotype int, laddr, raddr net.Addr) (c interface{}, err error) {
+func (g *GVisorStack) Socket(ctx context.Context, network string, family, sotype int, laddr, raddr net.Addr) (c interface{}, err error) {
 	var proto tcpip.NetworkProtocolNumber
 	var lFullAddr tcpip.FullAddress
 	var rFullAddr tcpip.FullAddress
@@ -178,16 +179,21 @@ func (stack *GVisorStack) Socket(ctx context.Context, network string, family, so
 		if sotype != syscall.SOCK_DGRAM {
 			return nil, errors.New("unsupported socket type")
 		}
-		c, err = gonet.DialUDP(stack.Stack, &lFullAddr, &rFullAddr, proto)
+
+		if raddr != nil {
+			c, err = gonet.DialUDP(g.Stack, &lFullAddr, &rFullAddr, proto)
+		} else {
+			c, err = gonet.DialUDP(g.Stack, &lFullAddr, nil, proto)
+		}
 	case "tcp", "tcp4":
 		if sotype != syscall.SOCK_STREAM {
 			return nil, errors.New("unsupported socket type")
 		}
 
 		if raddr != nil {
-			c, err = gonet.DialContextTCP(ctx, stack.Stack, rFullAddr, proto)
+			c, err = gonet.DialContextTCP(ctx, g.Stack, rFullAddr, proto)
 		} else {
-			c, err = gonet.ListenTCP(stack.Stack, lFullAddr, proto)
+			c, err = gonet.ListenTCP(g.Stack, lFullAddr, proto)
 		}
 	default:
 		return nil, errors.New("unsupported network")
@@ -203,28 +209,28 @@ func (fn writeNotifierFunc) WriteNotify() {
 }
 
 // SetWriteNotify implements [Stack.SetWriteNotify].
-func (stack *GVisorStack) SetWriteNotify(notifier func()) {
-	if stack.prevNotify != nil {
-		stack.Link.RemoveNotify(stack.prevNotify)
+func (g *GVisorStack) SetWriteNotify(notifier func()) {
+	if g.prevNotify != nil {
+		g.Link.RemoveNotify(g.prevNotify)
 	}
-	stack.prevNotify = stack.Link.AddNotify(writeNotifierFunc(notifier))
+	g.prevNotify = g.Link.AddNotify(writeNotifierFunc(notifier))
 }
 
 // WriteOutboundPacket implements [Stack.WriteOutboundPacket].
-func (iface *GVisorStack) WriteOutboundPacket(buf []byte) (int, error) {
+func (g *GVisorStack) WriteOutboundPacket(buf []byte) (int, error) {
 	var pkt *stack.PacketBuffer
 
-	if len(buf) < int(iface.Link.MTU()+EthernetMaximumSize) {
-		return 0, errors.New("too short buffer for writing outgoing packets (MTU limited)")
+	if len(buf) < int(g.Link.MTU()+EthernetMaximumSize) {
+		return 0, fmt.Errorf("outbound buffer too short (%d < %d)", len(buf), g.Link.MTU()+EthernetMaximumSize)
 	}
 
-	if pkt = iface.Link.Read(); pkt == nil {
+	if pkt = g.Link.Read(); pkt == nil {
 		return 0, nil
 	} else if pkt.Data().Size()+EthernetMinimumSize > len(buf) {
-		return 0, errors.New("outgoing packet exceeds MTU")
+		return 0, fmt.Errorf("outgoing packet too big (%d > %d)", pkt.Data().Size()+EthernetMinimumSize, len(buf))
 	}
 
-	mac := iface.Link.LinkAddress()
+	mac := g.Link.LinkAddress()
 	n := copy(buf, pkt.EgressRoute.RemoteLinkAddress)
 	n += copy(buf[n:], mac)
 
@@ -233,7 +239,7 @@ func (iface *GVisorStack) WriteOutboundPacket(buf []byte) (int, error) {
 
 	for _, v := range pkt.AsSlices() {
 		if n+len(v) > len(buf) {
-			return 0, errors.New("bad packet size calculation- exceeds MTU size")
+			return 0, fmt.Errorf("packet exceeds MTU size (%d > %d)", n+len(v), len(buf))
 		}
 
 		n += copy(buf[n:], v)
@@ -243,7 +249,7 @@ func (iface *GVisorStack) WriteOutboundPacket(buf []byte) (int, error) {
 }
 
 // RecvInboundPacket implements [Stack.RecvInboundPacket].
-func (iface *GVisorStack) RecvInboundPacket(buf []byte) error {
+func (g *GVisorStack) RecvInboundPacket(buf []byte) error {
 	hdrLen := EthernetMinimumSize
 
 	if len(buf) < hdrLen {
@@ -260,9 +266,28 @@ func (iface *GVisorStack) RecvInboundPacket(buf []byte) error {
 	})
 
 	copy(pkt.LinkHeader().Push(len(hdr)), hdr)
-	iface.Link.InjectInbound(proto, pkt)
+	g.Link.InjectInbound(proto, pkt)
 
 	return nil
+}
+
+// ListenerTCP4 returns a net.Listener capable of accepting IPv4 TCP
+// connections for the argument port on this stack.
+func (g *GVisorStack) ListenerTCP4(port uint16) (net.Listener, error) {
+	addr, tcpErr := g.Stack.GetMainNICAddress(g.NICID, ipv4.ProtocolNumber)
+
+	if tcpErr != nil {
+		return nil, fmt.Errorf("couldn't get NIC IP address: %v", tcpErr)
+	}
+
+	fullAddr := tcpip.FullAddress{Addr: addr.Address, Port: port, NIC: g.NICID}
+	listener, err := gonet.ListenTCP(g.Stack, fullAddr, ipv4.ProtocolNumber)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return (net.Listener)(listener), nil
 }
 
 // gvisorFullAddr attempts to convert the ip:port to a FullAddress struct.
