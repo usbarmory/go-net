@@ -71,18 +71,21 @@ type Interface struct {
 	// errors.
 	HandleStackErr func(err error, tx bool)
 
-	nic NetworkDevice
+	// NetworkDevice represents a [NetworkDevice] instance.
+	NetworkDevice NetworkDevice
 }
 
-// Init initializes the interface with a [NetworkDevice], bridging it with a
-// [Stack], the [NetworkDevice] argument can be omitted for manual stack usage.
+// Init initializes an [Interface] bridging its [Stack] and [NetworkDevice].
 //
 // If [Stack] is not set a default implementation is initialized, the stack is
 // configured with the CIDR address and hardware (MAC) address.
 //
-// The gateway may or may not be provided, if MAC is empty it will be set to a
-// random address.
-func (iface *Interface) Init(nic NetworkDevice, addr string, mac string, gateway string) (err error) {
+// If [NetworkDevice] is not set the [Stack] is left without a transmission
+// callback and [Interface.Start] has no effect.
+//
+// The gateway may or may not be provided, an empty MAC will result in a random
+// [Stack.HardwareAddress].
+func (iface *Interface) Init(addr string, mac string, gateway string) (err error) {
 	var laddr net.HardwareAddr
 
 	pfx, err := netip.ParsePrefix(addr)
@@ -113,9 +116,8 @@ func (iface *Interface) Init(nic NetworkDevice, addr string, mac string, gateway
 		return err
 	}
 
-	if nic != nil {
+	if iface.NetworkDevice != nil {
 		iface.Stack.SetWriteNotify(iface.notifyTx)
-		iface.nic = nic
 	}
 
 	return
@@ -127,7 +129,7 @@ func (iface *Interface) Init(nic NetworkDevice, addr string, mac string, gateway
 func (iface *Interface) Start() {
 	buf := make([]byte, MTU+EthernetMaximumSize)
 
-	if iface.nic == nil {
+	if iface.NetworkDevice == nil {
 		return
 	}
 
@@ -153,11 +155,11 @@ func (iface *Interface) tx(buf []byte) (n int, err error) {
 		return 0, nil
 	}
 
-	return n, iface.nic.Transmit(buf[:n])
+	return n, iface.NetworkDevice.Transmit(buf[:n])
 }
 
 func (iface *Interface) rx(buf []byte) (n int, err error) {
-	n, err = iface.nic.Receive(buf)
+	n, err = iface.NetworkDevice.Receive(buf)
 
 	if n == 0 || err != nil {
 		return
