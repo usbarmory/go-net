@@ -225,13 +225,13 @@ func (g *GVisorStack) WriteOutboundPacket(buf []byte) (int, error) {
 	var pkt *stack.PacketBuffer
 
 	if len(buf) < int(g.Link.MTU()+EthernetMaximumSize) {
-		return 0, errors.New("too short buffer for writing outgoing packets (MTU limited)")
+		return 0, fmt.Errorf("outbound buffer too short (%d < %d)", len(buf), g.Link.MTU()+EthernetMaximumSize)
 	}
 
 	if pkt = g.Link.Read(); pkt == nil {
 		return 0, nil
 	} else if pkt.Data().Size()+EthernetMinimumSize > len(buf) {
-		return 0, errors.New("outgoing packet exceeds MTU")
+		return 0, fmt.Errorf("outgoing packet too big (%d > %d)", pkt.Data().Size()+EthernetMinimumSize, len(buf))
 	}
 
 	mac := g.Link.LinkAddress()
@@ -243,7 +243,7 @@ func (g *GVisorStack) WriteOutboundPacket(buf []byte) (int, error) {
 
 	for _, v := range pkt.AsSlices() {
 		if n+len(v) > len(buf) {
-			return 0, errors.New("bad packet size calculation- exceeds MTU size")
+			return 0, fmt.Errorf("packet exceeds MTU size (%d > %d)", n+len(v), len(buf))
 		}
 
 		n += copy(buf[n:], v)

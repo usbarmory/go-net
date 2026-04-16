@@ -213,6 +213,10 @@ func (hw *Net) ReceiveWithHeader(buf []byte) (n int, err error) {
 		return 0, nil
 	}
 
+	if hw.rx.NeedsNotify() {
+		hw.Transport.QueueNotify(ReceiveQueue)
+	}
+
 	return
 }
 
@@ -238,7 +242,10 @@ func (hw *Net) Transmit(buf []byte) (_ error) {
 	buf = append(hdr, buf...)
 
 	hw.tx.Push(buf)
-	hw.Transport.QueueNotify(TransmitQueue)
+
+	if hw.rx.NeedsNotify() {
+		hw.Transport.QueueNotify(TransmitQueue)
+	}
 
 	return
 }
