@@ -145,24 +145,7 @@ func testStackARP(t *testing.T, stack Stack) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-
 	go iface.Start(ctx)
-
-	// Drain the stack's egress queue into the NIC. The gVisor channel.Endpoint
-	// fires WriteNotify on its own, but LnetoStack's writenotify only fires on
-	// rx and after Socket returns — so we poll WriteOutboundPacket to flush
-	// packets queued during a blocking Socket call.
-	go func() {
-		buf := make([]byte, MTU+EthernetMaximumSize)
-		for ctx.Err() == nil {
-			n, _ := iface.Stack.WriteOutboundPacket(buf)
-			if n < EthernetMinimumSize {
-				time.Sleep(time.Millisecond)
-				continue
-			}
-			nic.Transmit(buf[:n])
-		}
-	}()
 
 	_, err = iface.Stack.Socket(ctx, "tcp", syscall.AF_INET, syscall.SOCK_STREAM, nil, raddr)
 	if err == nil {
@@ -170,9 +153,6 @@ func testStackARP(t *testing.T, stack Stack) {
 	} else {
 		t.Log("Socket returned (expected):", err)
 	}
-
-	// Give the polling goroutine a moment to drain any final queued frames.
-	time.Sleep(10 * time.Millisecond)
 
 	if !nic.HasFrame(expected) {
 		t.Errorf("expected ARP request not transmitted\n  want: %x", expected)

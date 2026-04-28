@@ -1,0 +1,11 @@
+# IDE
+.vscode
+.claude
+
+# Debug artifacts
+*debug
+
+# Images.
+*.png
+*.jpg
+*.jpeg

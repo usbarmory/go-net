@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/soypat/lneto"
@@ -85,9 +85,9 @@ type LnetoStack struct {
 	tcpQueueSize     int
 	stack            xnet.StackAsync
 	// gostack holds a handle to xnet.StackAsync, it is just a wrapper type.
-	gostack       xnet.StackGo
-	writenotify   func()
-	rxtxgoroutine sync.Once
+	gostack      xnet.StackGo
+	_writenotify func()
+	goroutineID  atomic.Uint32
 }
 
 // Configure sets the MAC address, IP prefix and gateway.
@@ -129,6 +129,37 @@ func (ls *LnetoStack) Configure(mac net.HardwareAddr, ip netip.Prefix, gw netip.
 			NanoTime:           nil, // Uses time.Now().UnixNano().
 		},
 	})
+
+	// Drive the write-notify callback on a fixed cadence. The lneto stack
+	// queues outbound frames internally during blocking operations (ARP
+	// resolution, TCP handshake, retransmits) but, unlike gVisor's
+	// channel.Endpoint, has no built-in hook to notify the host of a new
+	// egress packet. Without this ticker the [Interface] would never drain
+	// the queue while a Socket call is blocking. Each Configure call bumps
+	// goroutineID and starts a fresh ticker; any previously-running ticker
+	// observes the mismatch on its next iteration and exits, so at most one
+	// ticker is live per stack.
+	go func(id uint32) {
+		var stats xnet.Statistics
+		backoff := ls.backoff
+		if backoff == nil {
+			backoff = defaultStackBackoff
+		}
+		var backoffs uint
+		for id == ls.goroutineID.Load() {
+			time.Sleep(5 * time.Millisecond)
+			ls.stack.ReadStatistics(&stats)
+			sent := stats.TotalSent
+			ls.tryWriteNotify(id)
+			ls.stack.ReadStatistics(&stats)
+			if sent != stats.TotalSent {
+				backoff(backoffs)
+				backoffs++
+			} else {
+				backoffs = 0
+			}
+		}
+	}(ls.goroutineID.Add(1)) // Increment goroutine ID to invalidate previously existing goroutines.
 	if gw.IsValid() {
 		// We need to discover gateway IP address.
 		go func(gw netip.Addr) {
@@ -157,15 +188,20 @@ func (ls *LnetoStack) EnableICMP() error {
 
 // Socket creates a network socket bound to laddr and connected to raddr.
 func (ls *LnetoStack) Socket(ctx context.Context, network string, family, sotype int, laddr, raddr net.Addr) (c interface{}, err error) {
-	if ls.writenotify != nil {
-		defer ls.writenotify()
-	}
+	defer ls.tryWriteNotify(ls.goroutineID.Load())
 	return ls.gostack.Socket(ctx, network, family, sotype, laddr, raddr)
 }
 
 // SetWriteNotify registers a callback invoked when outbound data is ready.
 func (ls *LnetoStack) SetWriteNotify(cb func()) {
-	ls.writenotify = cb
+	ls._writenotify = cb
+}
+
+func (ls *LnetoStack) tryWriteNotify(gid uint32) {
+	wn := ls._writenotify
+	if wn != nil && ls.goroutineID.Load() == gid {
+		wn()
+	}
 }
 
 // WriteOutboundPacket dequeues one outbound packet into buf, returning bytes written.
@@ -176,8 +212,8 @@ func (ls *LnetoStack) WriteOutboundPacket(buf []byte) (int, error) {
 // RecvInboundPacket delivers an inbound packet to the stack.
 func (ls *LnetoStack) RecvInboundPacket(buf []byte) error {
 	err := ls.stack.IngressEthernet(buf)
-	if err != lneto.ErrPacketDrop && ls.writenotify != nil {
-		ls.writenotify()
+	if err != lneto.ErrPacketDrop {
+		ls.tryWriteNotify(ls.goroutineID.Load())
 	}
 	return err
 }
