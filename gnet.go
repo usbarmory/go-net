@@ -17,6 +17,7 @@ package gnet
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"net"
 	"net/netip"
 	"runtime"
@@ -126,20 +127,21 @@ func (iface *Interface) Init(addr string, mac string, gateway string) (err error
 // Start begins processing of incoming packets, the function receives packets
 // through [NetworkDevice.Receive] and handles them through
 // [Stack.RecvInboundPacket], it should never return.
-func (iface *Interface) Start() {
+func (iface *Interface) Start(ctx context.Context) error {
 	buf := make([]byte, MTU+EthernetMaximumSize)
 
 	if iface.NetworkDevice == nil {
-		return
+		return errors.New("nil network device")
 	}
 
-	for {
+	for ctx.Err() == nil {
 		n, err := iface.rx(buf)
 
 		if err != nil || n == 0 {
 			runtime.Gosched()
 		}
 	}
+	return ctx.Err()
 }
 
 func (iface *Interface) tx(buf []byte) (n int, err error) {

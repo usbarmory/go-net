@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/soypat/lneto"
@@ -39,9 +40,11 @@ type LnetoConfig struct {
 	TCPQueueSize int
 }
 
-func DefaultLnetoStackConfig() LnetoConfig {
+// DefaultLnetoStackConfig returns an [LnetoConfig] ready for use with [NewLnetoStack]
+// with sane configuration parameters.
+func DefaultLnetoStackConfig() *LnetoConfig {
 	const tcpMaxSize = MTU - 20 - 20 // Do not consider IP+TCP headers.
-	return LnetoConfig{
+	return &LnetoConfig{
 		MaxActiveTCPPorts: 16,
 		MaxListenerConns:  32,             // Careful with number, large memory impact.
 		TCPBufferSize:     3 * tcpMaxSize, // 3× seems to work good on cyw43439.
@@ -50,10 +53,15 @@ func DefaultLnetoStackConfig() LnetoConfig {
 	}
 }
 
-// NewGVisorStack returns a gvisor stack ready to configure with the given [tcpip.NICID].
-func NewLnetoStack(hostname string, cfg LnetoConfig) *LnetoStack {
+// NewLnetoStack returns a stack using the [Lneto] userspace networking library.
+//
+// [Lneto]: https://github.com/soypat/lneto
+func NewLnetoStack(hostname string, cfg *LnetoConfig) *LnetoStack {
 	if hostname == "" {
 		hostname = "gonet-lneto"
+	}
+	if cfg == nil {
+		cfg = DefaultLnetoStackConfig()
 	}
 	return &LnetoStack{
 		hostname:         hostname,
@@ -77,11 +85,12 @@ type LnetoStack struct {
 	tcpQueueSize     int
 	stack            xnet.StackAsync
 	// gostack holds a handle to xnet.StackAsync, it is just a wrapper type.
-	gostack     xnet.StackGo
-	writenotify func()
+	gostack       xnet.StackGo
+	writenotify   func()
+	rxtxgoroutine sync.Once
 }
 
-// Configure sets the NIC ID, MAC address, IP prefix and gateway.
+// Configure sets the MAC address, IP prefix and gateway.
 // Gateway may be invalid.
 func (ls *LnetoStack) Configure(mac net.HardwareAddr, ip netip.Prefix, gw netip.Addr) error {
 	if len(mac) != 6 {

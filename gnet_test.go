@@ -13,6 +13,7 @@ import (
 	"net"
 	"syscall"
 	"testing"
+	"time"
 )
 
 const arpRequest = `ffffffffffffaabbccddeeff08060001080006040001aabbccddeeff0a0000010000000000000a000003`
@@ -31,7 +32,22 @@ func (d *DummyNIC) Transmit(buf []byte) (err error) {
 	return
 }
 
-func TestGVisorStack(t *testing.T) {
+func TestStacks(t *testing.T) {
+	t.Run("arp gVisor", func(t *testing.T) {
+		start := time.Now()
+		testStackARP(t, NewGVisorStack(1))
+		elapsed := time.Since(start)
+		t.Log(t.Name(), "elapsed", elapsed)
+	})
+	t.Run("arp lneto", func(t *testing.T) {
+		start := time.Now()
+		testStackARP(t, NewLnetoStack("lneto", nil))
+		elapsed := time.Since(start)
+		t.Log(t.Name(), "elapsed", elapsed)
+	})
+}
+
+func testStackARP(t *testing.T, stack Stack) {
 	const (
 		addr    = "10.0.0.1/24"
 		gateway = "10.0.0.2"
@@ -48,12 +64,12 @@ func TestGVisorStack(t *testing.T) {
 	}
 
 	iface := &Interface{
-		Stack: NewGVisorStack(1),
+		Stack: stack,
 	}
 
 	nic := &DummyNIC{}
 
-	if err := iface.Init(nic, addr, mac, gateway); err != nil {
+	if err := iface.Init(addr, mac, gateway); err != nil {
 		panic(err)
 	}
 
@@ -62,8 +78,16 @@ func TestGVisorStack(t *testing.T) {
 		Port: remotePort,
 	}
 
-	_, err = iface.Stack.Socket(context.Background(), "tcp", syscall.AF_INET, syscall.SOCK_STREAM, nil, raddr)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	go iface.Start(ctx)
 
+	_, err = iface.Stack.Socket(ctx, "tcp", syscall.AF_INET, syscall.SOCK_STREAM, nil, raddr)
+	if ctx.Err() != nil {
+		t.Fatal("unexpected blocking in stack:", ctx.Err())
+	} else if err != nil {
+		t.Log("expect no route:", err) // Should return error since no answer received.
+	}
 	if !bytes.Equal(nic.buf, payload) {
 		t.Errorf("tx payload mismatch:\n  %x\n  %x", nic.buf, payload)
 	}
