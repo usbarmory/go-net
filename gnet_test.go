@@ -11,9 +11,13 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"net/netip"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/soypat/lneto/arp"
+	"github.com/soypat/lneto/ethernet"
 )
 
 const arpRequest = `ffffffffffffaabbccddeeff08060001080006040001aabbccddeeff0a0000010000000000000a000003`
@@ -53,9 +57,28 @@ func testStackARP(t *testing.T, stack Stack) {
 		gateway = "10.0.0.2"
 		mac     = "aa:bb:cc:dd:ee:ff"
 
-		remoteAddr = "10.0.0.3"
-		remotePort = 80
+		remoteAddr  = "10.0.0.3"
+		remotePort  = 80
+		maxFrameLen = 1518
 	)
+	hwaddr, err := net.ParseMAC(mac)
+	ip := netip.MustParsePrefix(addr)
+	// build expected Ethernet+ARP frame.
+	var buf [maxFrameLen]byte
+	efrm, _ := ethernet.NewFrame(buf[:])
+	*efrm.DestinationHardwareAddr() = ethernet.BroadcastAddr()
+	*efrm.SourceHardwareAddr() = [6]byte(hwaddr)
+	efrm.SetEtherType(ethernet.TypeARP)
+	afrm, _ := arp.NewFrame(efrm.Payload())
+	senderHW, senderIP := afrm.Sender4()
+	targetHW, targetIP := afrm.Target4()
+	*senderHW = [6]byte(hwaddr)
+	*targetHW = ethernet.BroadcastAddr()
+	*senderIP = ip.Addr().As4()
+	*targetIP = [4]byte{}
+	afrm.SetHardware(1, 6)
+	afrm.SetOperation(arp.OpRequest)
+	afrm.SetProtocol(ethernet.TypeIPv4, 4)
 
 	payload, err := hex.DecodeString(arpRequest)
 
