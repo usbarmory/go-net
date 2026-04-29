@@ -25,6 +25,8 @@ var _ Stack = (*LnetoStack)(nil)
 
 // LnetoConfig provides configuration options to better optimize the LnetoStack.
 type LnetoConfig struct {
+	// Hostname specifies the hostname to use for DHCP. Optional.
+	Hostname string
 	// MaxActiveTCPPorts is a heap-memory guardrail to limit number of simultaneous open TCP ports.
 	MaxActiveTCPPorts uint16
 	// MaxListenerConns limits the amount of open [net.Listener] connections that can be established
@@ -35,6 +37,9 @@ type LnetoConfig struct {
 	// determine size of each TCP rx/tx ring buffers.
 	TCPBufferSize int
 	// BackoffStack sets the time between protocol checks for completion like DHCP, NTP, DNS etc. via the blocking APIs.
+	// BackoffStack can use a channel driven approach behind the scenes
+	// and return [lneto.BackoffFlagNop] to signal backoff yield is
+	// implemented by the callback and that no sleep should be performed.
 	BackoffStack lneto.BackoffStrategy
 	// TCPQueueSize sets the number of packets that can be sent out and not be acknowledged before halting new packet tx.
 	TCPQueueSize int
@@ -56,15 +61,15 @@ func DefaultLnetoStackConfig() *LnetoConfig {
 // NewLnetoStack returns a stack using the [Lneto] userspace networking library.
 //
 // [Lneto]: https://github.com/soypat/lneto
-func NewLnetoStack(hostname string, cfg *LnetoConfig) *LnetoStack {
-	if hostname == "" {
-		hostname = "gonet-lneto"
+func NewLnetoStack(cfg *LnetoConfig) *LnetoStack {
+	if cfg.Hostname == "" {
+		cfg.Hostname = "gonet-lneto"
 	}
 	if cfg == nil {
 		cfg = DefaultLnetoStackConfig()
 	}
 	return &LnetoStack{
-		hostname:         hostname,
+		hostname:         cfg.Hostname,
 		maxTCPPorts:      cfg.MaxActiveTCPPorts,
 		maxListenerConns: cfg.MaxListenerConns,
 		backoff:          cfg.BackoffStack,
@@ -96,12 +101,14 @@ func (ls *LnetoStack) Configure(mac net.HardwareAddr, ip netip.Prefix, gw netip.
 	if len(mac) != 6 {
 		return errors.New("only MAC address of length 6 supported")
 	}
-	var rnd [8]byte
-	rand.Read(rnd[:])
+	// Invalidate existing goroutine before resetting stack.
+	ls.goroutineID.Add(1)
+	rnd := make([]byte, 8)
+	rand.Read(rnd)
 	stack := &ls.stack
 	err := stack.Reset(xnet.StackConfig{
 		StaticAddress:     ip.Addr(),
-		RandSeed:          int64(binary.LittleEndian.Uint64(rnd[:])),
+		RandSeed:          int64(binary.LittleEndian.Uint64(rnd)),
 		MaxActiveTCPPorts: ls.maxTCPPorts,
 		MaxActiveUDPPorts: 0, // Unsupported as of yet.
 		Hostname:          ls.hostname,
@@ -130,47 +137,10 @@ func (ls *LnetoStack) Configure(mac net.HardwareAddr, ip netip.Prefix, gw netip.
 		},
 	})
 
-	// Drive the write-notify callback on a fixed cadence. The lneto stack
-	// queues outbound frames internally during blocking operations (ARP
-	// resolution, TCP handshake, retransmits) but, unlike gVisor's
-	// channel.Endpoint, has no built-in hook to notify the host of a new
-	// egress packet. Without this ticker the [Interface] would never drain
-	// the queue while a Socket call is blocking. Each Configure call bumps
-	// goroutineID and starts a fresh ticker; any previously-running ticker
-	// observes the mismatch on its next iteration and exits, so at most one
-	// ticker is live per stack.
-	go func(id uint32) {
-		var stats xnet.Statistics
-		backoff := ls.backoff
-		if backoff == nil {
-			backoff = defaultStackBackoff
-		}
-		var backoffs uint
-		for id == ls.goroutineID.Load() {
-			time.Sleep(5 * time.Millisecond)
-			ls.stack.ReadStatistics(&stats)
-			sent := stats.TotalSent
-			ls.tryWriteNotify(id)
-			ls.stack.ReadStatistics(&stats)
-			if sent != stats.TotalSent {
-				backoff(backoffs)
-				backoffs++
-			} else {
-				backoffs = 0
-			}
-		}
-	}(ls.goroutineID.Add(1)) // Increment goroutine ID to invalidate previously existing goroutines.
+	go ls.lifetimeGoroutine(ls.goroutineID.Add(1))
 	if gw.IsValid() {
 		// We need to discover gateway IP address.
-		go func(gw netip.Addr) {
-			blocking := stack.StackBlocking(ls.backoff)
-			hw, err := blocking.DoResolveHardwareAddress6(gw, 5*time.Second)
-			if err != nil {
-				fmt.Printf("failed to resolve hardware address for %s: %v\n", gw.String(), err)
-			} else {
-				stack.SetGateway6(hw)
-			}
-		}(gw)
+		go ls.resolveSetGateway(gw)
 	}
 	return nil
 }
@@ -218,16 +188,60 @@ func (ls *LnetoStack) RecvInboundPacket(buf []byte) error {
 	return err
 }
 
+func (ls *LnetoStack) resolveSetGateway(gw netip.Addr) (err error) {
+	blocking := ls.stack.StackBlocking(ls.backoff)
+	hw, err := blocking.DoResolveHardwareAddress6(gw, 5*time.Second)
+	if err != nil {
+		fmt.Printf("failed to resolve hardware address for %s: %v\n", gw.String(), err)
+		return err
+	}
+	ls.stack.SetGateway6(hw)
+	return nil
+}
+
+// lifetimeGoroutine drives the write-notify callback on a fixed cadence. The lneto stack
+// queues outbound frames internally during blocking operations (ARP
+// resolution, TCP handshake, retransmits) but, unlike gVisor's
+// channel.Endpoint, has no built-in hook to notify the host of a new
+// egress packet. Without this ticker the [Interface] would never drain
+// the queue while a Socket call is blocking. Each Configure call bumps
+// goroutineID and starts a fresh ticker; any previously-running ticker
+// observes the mismatch on its next iteration and exits, so at most one
+// ticker is live per stack.
+func (ls *LnetoStack) lifetimeGoroutine(id uint32) {
+	var stats xnet.Statistics
+	backoff := ls.backoff
+	if backoff == nil {
+		backoff = defaultStackBackoff
+	}
+	var backoffs uint
+	for id == ls.goroutineID.Load() {
+		ls.stack.ReadStatistics(&stats)
+		sent := stats.TotalSent
+		ls.tryWriteNotify(id)
+		if id != ls.goroutineID.Load() {
+			break
+		}
+		ls.stack.ReadStatistics(&stats)
+		if sent != stats.TotalSent {
+			backoff.Do(backoffs)
+			backoffs++
+		} else {
+			backoffs = 0
+		}
+	}
+}
+
 // defaultStackBackoff returns a backoff duration for stack protocol retry loops.
 // This strategy is meant for DHCP,NTP- not for stream protocols like TCP.
 func defaultStackBackoff(consecutiveBackoffs uint) time.Duration {
 	const (
 		// Stay in 32bit space for faster operations.
-		minWait = 100 * uint32(time.Microsecond)
-		maxWait = 20 * uint32(time.Millisecond)
+		minWait = 100 * time.Microsecond
+		maxWait = 20 * time.Millisecond
 
-		maxShift       = 15
-		_overflowCheck = minWait << maxShift
+		maxShift                  = 15
+		_compileTimeOverflowCheck = minWait << maxShift
 	)
 	sleep := minWait << min(consecutiveBackoffs, maxShift)
 	if sleep > maxWait {
