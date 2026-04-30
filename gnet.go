@@ -56,7 +56,8 @@ type Stack interface {
 	// Socket creates a network socket bound to laddr and connected to raddr.
 	Socket(ctx context.Context, network string, family, sotype int, laddr, raddr net.Addr) (c interface{}, err error)
 	// SetWriteNotify registers a callback invoked when outbound data is ready.
-	SetWriteNotify(cb func())
+	// The argument buffer if present can be used by the callback to fulfill data exchange.
+	SetWriteNotify(cb func(auxbuf []byte))
 	// WriteOutboundPacket dequeues one outbound packet into buf, returning bytes written.
 	WriteOutboundPacket(buf []byte) (int, error)
 	// RecvInboundPacket delivers an inbound packet to the stack.
@@ -176,6 +177,9 @@ func (iface *Interface) rx(buf []byte) (n int, err error) {
 	return
 }
 
-func (iface *Interface) notifyTx() {
-	iface.tx(make([]byte, MTU+EthernetMaximumSize))
+func (iface *Interface) notifyTx(buf []byte) {
+	if len(buf) == 0 {
+		buf = make([]byte, MTU+EthernetMaximumSize)
+	}
+	iface.tx(buf)
 }

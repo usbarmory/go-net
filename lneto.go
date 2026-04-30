@@ -62,11 +62,11 @@ func DefaultLnetoStackConfig() *LnetoConfig {
 //
 // [Lneto]: https://github.com/soypat/lneto
 func NewLnetoStack(cfg *LnetoConfig) *LnetoStack {
-	if cfg.Hostname == "" {
-		cfg.Hostname = "gonet-lneto"
-	}
 	if cfg == nil {
 		cfg = DefaultLnetoStackConfig()
+	}
+	if cfg.Hostname == "" {
+		cfg.Hostname = "gonet-lneto"
 	}
 	return &LnetoStack{
 		hostname:         cfg.Hostname,
@@ -91,7 +91,7 @@ type LnetoStack struct {
 	stack            xnet.StackAsync
 	// gostack holds a handle to xnet.StackAsync, it is just a wrapper type.
 	gostack      xnet.StackGo
-	_writenotify func()
+	_writenotify func(buf []byte)
 	goroutineID  atomic.Uint32
 }
 
@@ -158,19 +158,18 @@ func (ls *LnetoStack) EnableICMP() error {
 
 // Socket creates a network socket bound to laddr and connected to raddr.
 func (ls *LnetoStack) Socket(ctx context.Context, network string, family, sotype int, laddr, raddr net.Addr) (c interface{}, err error) {
-	defer ls.tryWriteNotify(ls.goroutineID.Load())
 	return ls.gostack.Socket(ctx, network, family, sotype, laddr, raddr)
 }
 
 // SetWriteNotify registers a callback invoked when outbound data is ready.
-func (ls *LnetoStack) SetWriteNotify(cb func()) {
+func (ls *LnetoStack) SetWriteNotify(cb func(buf []byte)) {
 	ls._writenotify = cb
 }
 
-func (ls *LnetoStack) tryWriteNotify(gid uint32) {
+func (ls *LnetoStack) tryWriteNotify(gid uint32, buf []byte) {
 	wn := ls._writenotify
 	if wn != nil && ls.goroutineID.Load() == gid {
-		wn()
+		wn(buf)
 	}
 }
 
@@ -181,11 +180,7 @@ func (ls *LnetoStack) WriteOutboundPacket(buf []byte) (int, error) {
 
 // RecvInboundPacket delivers an inbound packet to the stack.
 func (ls *LnetoStack) RecvInboundPacket(buf []byte) error {
-	err := ls.stack.IngressEthernet(buf)
-	if err != lneto.ErrPacketDrop {
-		ls.tryWriteNotify(ls.goroutineID.Load())
-	}
-	return err
+	return ls.stack.IngressEthernet(buf)
 }
 
 func (ls *LnetoStack) resolveSetGateway(gw netip.Addr) (err error) {
@@ -214,11 +209,12 @@ func (ls *LnetoStack) lifetimeGoroutine(id uint32) {
 	if backoff == nil {
 		backoff = defaultStackBackoff
 	}
+	writeBuf := make([]byte, MTU+EthernetMaximumSize)
 	var backoffs uint
 	for id == ls.goroutineID.Load() {
 		ls.stack.ReadStatistics(&stats)
 		sent := stats.TotalSent
-		ls.tryWriteNotify(id)
+		ls.tryWriteNotify(id, writeBuf)
 		if id != ls.goroutineID.Load() {
 			break
 		}

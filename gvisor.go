@@ -201,14 +201,14 @@ func (g *GVisorStack) Socket(ctx context.Context, network string, family, sotype
 	return c, err
 }
 
-type writeNotifierFunc func()
+type writeNotifierFunc func(buf []byte)
 
 func (fn writeNotifierFunc) WriteNotify() {
-	fn()
+	fn(nil)
 }
 
 // SetWriteNotify implements [Stack.SetWriteNotify].
-func (g *GVisorStack) SetWriteNotify(notifier func()) {
+func (g *GVisorStack) SetWriteNotify(notifier func(buf []byte)) {
 	if g.prevNotify != nil {
 		g.Link.RemoveNotify(g.prevNotify)
 	}

@@ -79,7 +79,7 @@ func TestStacks(t *testing.T) {
 	})
 	t.Run("arp lneto", func(t *testing.T) {
 		start := time.Now()
-		testStackARP(t, NewLnetoStack("lneto", nil))
+		testStackARP(t, NewLnetoStack(nil))
 		elapsed := time.Since(start)
 		t.Log(t.Name(), "elapsed", elapsed)
 	})
