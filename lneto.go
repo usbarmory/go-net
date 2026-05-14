@@ -233,10 +233,10 @@ func (ls *LnetoStack) lifetimeGoroutine(id uint32) {
 		}
 		ls.stack.ReadStatistics(&stats)
 		if sent != stats.TotalSent {
-			backoff.Do(backoffs)
-			backoffs++
+			backoffs = 0 // packet sent — stay eager
 		} else {
-			backoffs = 0
+			backoff.Do(backoffs) // idle — back off
+			backoffs++
 		}
 	}
 }
@@ -251,10 +251,12 @@ func (ls *LnetoStack) interruptBackoff() {
 type event struct{}
 
 // interruptBackoff takes an existing backoff strategy and makes it interruptible via write to channel.
+// The returned strategy is safe to call from multiple goroutines concurrently: each call creates its
+// own timer, so goroutines do not race on a shared ticker. The irq channel (capacity 1) is shared;
+// one interrupt wakes exactly one sleeping caller, which is the intended best-effort behavior.
 func interruptBackoff(backoff lneto.BackoffStrategy) (interrupt chan<- event, _ lneto.BackoffStrategy) {
 	irq := make(chan event, 1)
-	ticker := time.NewTicker(time.Hour)
-	tickedBackoff := func(consecutiveBackoffs uint) (sleepOrFlag time.Duration) {
+	interruptibleBackoff := func(consecutiveBackoffs uint) (sleepOrFlag time.Duration) {
 		sleepOrFlag = backoff(consecutiveBackoffs)
 		switch sleepOrFlag {
 		case lneto.BackoffFlagGosched:
@@ -262,21 +264,18 @@ func interruptBackoff(backoff lneto.BackoffStrategy) (interrupt chan<- event, _ 
 		case lneto.BackoffFlagNop:
 			// Do nothing.
 		default:
-			select {
-			case <-ticker.C: // Pull ticker if present.
-			default:
-			}
-			ticker.Reset(sleepOrFlag)
+			timer := time.NewTimer(sleepOrFlag) // per-call: goroutines must not share a timer
 			select {
 			case <-irq:
-				// Received request to interrupt sleep.
-			case <-ticker.C:
-				// Sleep done before interrupt.
+				if !timer.Stop() && len(timer.C) > 0 {
+					<-timer.C
+				}
+			case <-timer.C:
 			}
 		}
-		return lneto.BackoffFlagNop // Yield handled entirely by this callback signal caller to do nothing.
+		return lneto.BackoffFlagNop // Yield handled entirely by this callback; signal caller to do nothing.
 	}
-	return irq, tickedBackoff
+	return irq, interruptibleBackoff
 }
 
 // defaultStackBackoff returns a backoff duration for stack protocol retry loops.
