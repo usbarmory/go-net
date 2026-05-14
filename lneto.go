@@ -168,7 +168,8 @@ func (ls *LnetoStack) EnableICMP() error {
 
 // Socket creates a network socket bound to laddr and connected to raddr.
 func (ls *LnetoStack) Socket(ctx context.Context, network string, family, sotype int, laddr, raddr net.Addr) (c interface{}, err error) {
-	defer ls.interruptBackoff()
+	ls.interruptBackoff()       // wake lifetimeGoroutine: packets will be queued immediately
+	defer ls.interruptBackoff() // wake again on return so sleepers react to completion
 	return ls.gostack.Socket(ctx, network, family, sotype, laddr, raddr)
 }
 
