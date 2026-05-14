@@ -4,7 +4,7 @@ go 1.26.2
 
 require (
 	github.com/soypat/lneto v0.1.0
-	github.com/usbarmory/tamago v1.26.2
+	github.com/usbarmory/tamago v1.26.3
 	gvisor.dev/gvisor v0.0.0-20250911055229-61a46406f068
 )
 
@@ -13,3 +13,5 @@ require (
 	golang.org/x/sys v0.26.0 // indirect
 	golang.org/x/time v0.7.0 // indirect
 )
+
+replace github.com/soypat/lneto => ../lneto

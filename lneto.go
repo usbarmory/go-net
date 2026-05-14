@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"runtime"
 	"sync/atomic"
 	"time"
 
@@ -68,13 +69,15 @@ func NewLnetoStack(cfg *LnetoConfig) *LnetoStack {
 	if cfg.Hostname == "" {
 		cfg.Hostname = "gonet-lneto"
 	}
+	irq, backoff := interruptBackoff(cfg.BackoffStack)
 	return &LnetoStack{
 		hostname:         cfg.Hostname,
 		maxTCPPorts:      cfg.MaxActiveTCPPorts,
 		maxListenerConns: cfg.MaxListenerConns,
-		backoff:          cfg.BackoffStack,
 		tcpBufSize:       cfg.TCPBufferSize,
 		tcpQueueSize:     cfg.TCPQueueSize,
+		backoff:          backoff,
+		backoffirq:       irq,
 	}
 }
 
@@ -86,7 +89,8 @@ type LnetoStack struct {
 	maxTCPPorts      uint16
 	maxListenerConns uint16
 	backoff          lneto.BackoffStrategy // Determine poll duration for blocking operations.
-	tcpBufSize       int                   // determine size of TCP rx/tx ring buffers.
+	backoffirq       chan<- event
+	tcpBufSize       int // determine size of TCP rx/tx ring buffers.
 	tcpQueueSize     int
 	stack            xnet.StackAsync
 	// gostack holds a handle to xnet.StackAsync, it is just a wrapper type.
@@ -101,21 +105,28 @@ func (ls *LnetoStack) Configure(mac net.HardwareAddr, ip netip.Prefix, gw netip.
 	if len(mac) != 6 {
 		return errors.New("only MAC address of length 6 supported")
 	}
-	// Invalidate existing goroutine before resetting stack.
-	ls.goroutineID.Add(1)
+	// Invalidate existing goroutine before resetting stack.\
 	rnd := make([]byte, 8)
 	rand.Read(rnd)
-	stack := &ls.stack
-	err := stack.Reset(xnet.StackConfig{
-		StaticAddress:     ip.Addr(),
-		RandSeed:          int64(binary.LittleEndian.Uint64(rnd)),
+	cfg := xnet.StackConfig{
+		RandSeed:          int64(binary.LittleEndian.Uint64(rnd[:])),
 		MaxActiveTCPPorts: ls.maxTCPPorts,
 		MaxActiveUDPPorts: 0, // Unsupported as of yet.
 		Hostname:          ls.hostname,
 		HardwareAddress:   [6]byte(mac),
 		MTU:               uint16(MTU),
-		ICMPQueueLimit:    8,
-	})
+		ICMPQueueLimit:    32,
+	}
+	if ip.Addr().Is4() {
+		cfg.StaticAddress4 = ip.Addr().As4()
+	} else if ip.Addr().Is6() {
+		cfg.StaticAddress6 = ip.Addr().As16()
+		cfg.IPv6Stack = xnet.DefaultStack6()
+	}
+
+	ls.goroutineID.Add(1)
+	stack := &ls.stack
+	err := stack.Reset(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to configure lneto stack: %w", err)
 	}
@@ -123,7 +134,6 @@ func (ls *LnetoStack) Configure(mac net.HardwareAddr, ip netip.Prefix, gw netip.
 	var hostCtl xnet.DHCPResults
 	hostCtl.Subnet = ip
 	stack.AssimilateDHCPResults(&hostCtl)
-
 	// Prepare socket stack.
 	ls.gostack = stack.StackGo(ls.backoff, xnet.StackGoConfig{
 		ListenerPoolConfig: xnet.TCPPoolConfig{
@@ -147,7 +157,7 @@ func (ls *LnetoStack) Configure(mac net.HardwareAddr, ip netip.Prefix, gw netip.
 
 // HardwareAddress returns the MAC address of the NIC.
 func (ls *LnetoStack) HardwareAddress() (net.HardwareAddr, error) {
-	hw := ls.stack.HardwareAddress()
+	hw := ls.stack.HardwareAddr()
 	return hw[:], nil
 }
 
@@ -158,6 +168,7 @@ func (ls *LnetoStack) EnableICMP() error {
 
 // Socket creates a network socket bound to laddr and connected to raddr.
 func (ls *LnetoStack) Socket(ctx context.Context, network string, family, sotype int, laddr, raddr net.Addr) (c interface{}, err error) {
+	defer ls.interruptBackoff()
 	return ls.gostack.Socket(ctx, network, family, sotype, laddr, raddr)
 }
 
@@ -175,11 +186,13 @@ func (ls *LnetoStack) tryWriteNotify(gid uint32, buf []byte) {
 
 // WriteOutboundPacket dequeues one outbound packet into buf, returning bytes written.
 func (ls *LnetoStack) WriteOutboundPacket(buf []byte) (int, error) {
+	defer ls.interruptBackoff()
 	return ls.stack.EgressEthernet(buf)
 }
 
 // RecvInboundPacket delivers an inbound packet to the stack.
 func (ls *LnetoStack) RecvInboundPacket(buf []byte) error {
+	defer ls.interruptBackoff()
 	return ls.stack.IngressEthernet(buf)
 }
 
@@ -190,7 +203,7 @@ func (ls *LnetoStack) resolveSetGateway(gw netip.Addr) (err error) {
 		fmt.Printf("failed to resolve hardware address for %s: %v\n", gw.String(), err)
 		return err
 	}
-	ls.stack.SetGateway6(hw)
+	ls.stack.SetGatewayHardwareAddr(hw)
 	return nil
 }
 
@@ -226,6 +239,44 @@ func (ls *LnetoStack) lifetimeGoroutine(id uint32) {
 			backoffs = 0
 		}
 	}
+}
+
+func (ls *LnetoStack) interruptBackoff() {
+	select {
+	case ls.backoffirq <- event{}:
+	default:
+	}
+}
+
+type event struct{}
+
+// interruptBackoff takes an existing backoff strategy and makes it interruptible via write to channel.
+func interruptBackoff(backoff lneto.BackoffStrategy) (interrupt chan<- event, _ lneto.BackoffStrategy) {
+	irq := make(chan event, 1)
+	ticker := time.NewTicker(time.Hour)
+	tickedBackoff := func(consecutiveBackoffs uint) (sleepOrFlag time.Duration) {
+		sleepOrFlag = backoff(consecutiveBackoffs)
+		switch sleepOrFlag {
+		case lneto.BackoffFlagGosched:
+			runtime.Gosched()
+		case lneto.BackoffFlagNop:
+			// Do nothing.
+		default:
+			select {
+			case <-ticker.C: // Pull ticker if present.
+			default:
+			}
+			ticker.Reset(sleepOrFlag)
+			select {
+			case <-irq:
+				// Received request to interrupt sleep.
+			case <-ticker.C:
+				// Sleep done before interrupt.
+			}
+		}
+		return lneto.BackoffFlagNop // Yield handled entirely by this callback signal caller to do nothing.
+	}
+	return irq, tickedBackoff
 }
 
 // defaultStackBackoff returns a backoff duration for stack protocol retry loops.
