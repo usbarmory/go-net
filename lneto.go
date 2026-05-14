@@ -187,8 +187,15 @@ func (ls *LnetoStack) tryWriteNotify(gid uint32, buf []byte) {
 
 // WriteOutboundPacket dequeues one outbound packet into buf, returning bytes written.
 func (ls *LnetoStack) WriteOutboundPacket(buf []byte) (int, error) {
-	defer ls.interruptBackoff()
-	return ls.stack.EgressEthernet(buf)
+	n, err := ls.stack.EgressEthernet(buf)
+	if n > 0 {
+		// Only interrupt when a packet was actually dequeued. An unconditional
+		// interrupt here would re-fill irq every idle poll, making backoff.Do
+		// a no-op and creating a busy-loop that starves other goroutines under
+		// GOMAXPROCS=1 (bare-metal cooperative scheduling).
+		ls.interruptBackoff()
+	}
+	return n, err
 }
 
 // RecvInboundPacket delivers an inbound packet to the stack.
@@ -235,6 +242,7 @@ func (ls *LnetoStack) lifetimeGoroutine(id uint32) {
 		ls.stack.ReadStatistics(&stats)
 		if sent != stats.TotalSent {
 			backoffs = 0 // packet sent — stay eager
+			runtime.Gosched()
 		} else {
 			backoff.Do(backoffs) // idle — back off
 			backoffs++
