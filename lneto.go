@@ -66,6 +66,9 @@ func NewLnetoStack(cfg *LnetoConfig) *LnetoStack {
 	if cfg == nil {
 		cfg = DefaultLnetoStackConfig()
 	}
+	if cfg.BackoffStack == nil {
+		cfg.BackoffStack = defaultStackBackoff
+	}
 	if cfg.Hostname == "" {
 		cfg.Hostname = "gonet-lneto"
 	}
