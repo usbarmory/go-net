@@ -67,7 +67,16 @@ func NewLnetoStack(cfg *LnetoConfig) *LnetoStack {
 		cfg = DefaultLnetoStackConfig()
 	}
 	if cfg.BackoffStack == nil {
-		cfg.BackoffStack = defaultStackBackoff
+		if runtime.GOMAXPROCS(0) == 1 {
+			// On a single-threaded target there is no OS scheduler to throttle
+			// a busy loop; sleeping starves the NIC poll → frame loss. Gosched
+			// keeps the poll continuous while still yielding cooperatively.
+			cfg.BackoffStack = func(_ uint) time.Duration {
+				return lneto.BackoffFlagGosched
+			}
+		} else {
+			cfg.BackoffStack = defaultStackBackoff
+		}
 	}
 	if cfg.Hostname == "" {
 		cfg.Hostname = "gonet-lneto"
