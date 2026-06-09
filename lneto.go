@@ -58,8 +58,9 @@ func DefaultLnetoStackConfig() *LnetoConfig {
 		MaxListenerConns:  32,             // Careful with number, large memory impact.
 		TCPBufferSize:     3 * tcpMaxSize, // 3× seems to work good on cyw43439.
 		TCPQueueSize:      8,
-		BackoffStack:      defaultStackBackoff,
-		NewBackoffTCP:     defaultNewTCPBackoff,
+		// Backoffs are nil here, they are automatically set in NewLnetoStack.
+		BackoffStack:  nil,
+		NewBackoffTCP: nil,
 	}
 }
 
