@@ -42,6 +42,9 @@ type LnetoConfig struct {
 	// and return [lneto.BackoffFlagNop] to signal backoff yield is
 	// implemented by the callback and that no sleep should be performed.
 	BackoffStack lneto.BackoffStrategy
+	// NewBackoffTCP returns a per-connection backoff strategy for TCP read/write retries.
+	// If nil, a short-exponential default is used (or [lneto.BackoffFlagGosched] on GOMAXPROCS=1).
+	NewBackoffTCP func() lneto.BackoffStrategy
 	// TCPQueueSize sets the number of packets that can be sent out and not be acknowledged before halting new packet tx.
 	TCPQueueSize int
 }
@@ -56,6 +59,7 @@ func DefaultLnetoStackConfig() *LnetoConfig {
 		TCPBufferSize:     3 * tcpMaxSize, // 3× seems to work good on cyw43439.
 		TCPQueueSize:      8,
 		BackoffStack:      defaultStackBackoff,
+		NewBackoffTCP:     defaultNewTCPBackoff,
 	}
 }
 
@@ -71,18 +75,25 @@ func NewLnetoStack(cfg *LnetoConfig) *LnetoStack {
 			// On a single-threaded target there is no OS scheduler to throttle
 			// a busy loop; sleeping starves the NIC poll → frame loss. Gosched
 			// keeps the poll continuous while still yielding cooperatively.
-			cfg.BackoffStack = func(_ uint) time.Duration {
-				return lneto.BackoffFlagGosched
-			}
+			cfg.BackoffStack = backoffYield
 		} else {
 			cfg.BackoffStack = defaultStackBackoff
+		}
+	}
+	if cfg.NewBackoffTCP == nil {
+		if runtime.GOMAXPROCS(0) == 1 {
+			cfg.NewBackoffTCP = func() lneto.BackoffStrategy {
+				return backoffYield
+			}
+		} else {
+			cfg.NewBackoffTCP = defaultNewTCPBackoff
 		}
 	}
 	if cfg.Hostname == "" {
 		cfg.Hostname = "gonet-lneto"
 	}
 	irq, backoff := interruptBackoff(cfg.BackoffStack)
-	return &LnetoStack{
+	ls := &LnetoStack{
 		hostname:         cfg.Hostname,
 		maxTCPPorts:      cfg.MaxActiveTCPPorts,
 		maxListenerConns: cfg.MaxListenerConns,
@@ -90,7 +101,9 @@ func NewLnetoStack(cfg *LnetoConfig) *LnetoStack {
 		tcpQueueSize:     cfg.TCPQueueSize,
 		backoff:          backoff,
 		backoffirq:       irq,
+		tcpbackoff:       cfg.NewBackoffTCP,
 	}
+	return ls
 }
 
 // LnetoStack implements [Stack] with the [lneto] networking package.
@@ -102,6 +115,7 @@ type LnetoStack struct {
 	maxListenerConns uint16
 	backoff          lneto.BackoffStrategy // Determine poll duration for blocking operations.
 	backoffirq       chan<- event
+	tcpbackoff       func() lneto.BackoffStrategy
 	tcpBufSize       int // determine size of TCP rx/tx ring buffers.
 	tcpQueueSize     int
 	stack            xnet.StackAsync
@@ -156,6 +170,7 @@ func (ls *LnetoStack) Configure(mac net.HardwareAddr, ip netip.Prefix, gw netip.
 			EstablishedTimeout: 4 * time.Second,
 			ClosingTimeout:     2 * time.Second,
 			NanoTime:           nil, // Uses time.Now().UnixNano().
+			NewBackoff:         ls.tcpbackoff,
 		},
 	})
 
@@ -315,4 +330,28 @@ func defaultStackBackoff(consecutiveBackoffs uint) time.Duration {
 		sleep = maxWait
 	}
 	return time.Duration(sleep)
+}
+
+func defaultNewTCPBackoff() lneto.BackoffStrategy {
+	return defaultTCPBackoff
+}
+
+// defaultTCPBackoff returns a per-connection read/write retry backoff for TCP stream protocols.
+// Shorter range than defaultStackBackoff to keep interactive sessions (e.g. SSH) responsive.
+func defaultTCPBackoff(consecutiveBackoffs uint) time.Duration {
+	const (
+		minWait                   = 10 * time.Microsecond
+		maxWait                   = 1 * time.Millisecond
+		maxShift                  = 10
+		_compileTimeOverflowCheck = minWait << maxShift
+	)
+	sleep := minWait << min(consecutiveBackoffs, maxShift)
+	if sleep > maxWait {
+		sleep = maxWait
+	}
+	return time.Duration(sleep)
+}
+
+func backoffYield(consecutiveBackoffs uint) time.Duration {
+	return lneto.BackoffFlagGosched
 }
