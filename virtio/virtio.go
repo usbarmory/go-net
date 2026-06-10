@@ -242,10 +242,7 @@ func (hw *Net) Transmit(buf []byte) (_ error) {
 	buf = append(hdr, buf...)
 
 	hw.tx.Push(buf)
-
-	if hw.rx.NeedsNotify() {
-		hw.Transport.QueueNotify(TransmitQueue)
-	}
+	hw.Transport.QueueNotify(TransmitQueue)
 
 	return
 }
