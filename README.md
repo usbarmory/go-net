@@ -12,6 +12,7 @@ the interface `Socket` function.
 Support for the following pure Go network stacks is provided:
 
   * [gVisor](https://github.com/usbarmory/go-net/blob/main/gvisor.go) (`go` branch) [tcpip](https://pkg.go.dev/gvisor.dev/gvisor/pkg/tcpip) stack.
+  * [lneto](https://github.com/soypat/lneto) networking library
 
 The following packages provide compatible network devices:
 
@@ -37,6 +38,11 @@ iface := gnet.Interface{
 	Stack: NewGVisorStack(1),
 }
 
+// gnet interface with lneto stack
+iface := gnet.Interface{
+	Stack: NewLnetoStack(nil),
+}
+
 // initialize IP, MAC, Gateway
 _ = iface.Init(nic, "10.0.0.1/24", "", "10.0.0.2")
 
@@ -49,7 +55,6 @@ UEFI
 
 See [go-boot](https://github.com/usbarmory/go-boot/blob/main/cmd/net.go)
 for a full integration example with the UEFI Simple Network Protocol.
-
 
 VirtIO
 ------
