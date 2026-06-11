@@ -67,13 +67,8 @@ func (g *GVisorStack) HardwareAddress() (net.HardwareAddr, error) {
 }
 
 // Configure implements [Stack.Configure].
-func (g *GVisorStack) Configure(mac string, ip netip.Prefix, gw netip.Addr) (err error) {
-	linkAddr, err := tcpip.ParseMACAddress(mac)
-
-	if err != nil {
-		return
-	}
-
+func (g *GVisorStack) Configure(mac net.HardwareAddr, ip netip.Prefix, gw netip.Addr) (err error) {
+	linkAddr := tcpip.LinkAddress(mac)
 	if g.NICID == 0 {
 		g.NICID = tcpip.NICID(NICID)
 	}
@@ -206,14 +201,14 @@ func (g *GVisorStack) Socket(ctx context.Context, network string, family, sotype
 	return c, err
 }
 
-type writeNotifierFunc func()
+type writeNotifierFunc func(buf []byte)
 
 func (fn writeNotifierFunc) WriteNotify() {
-	fn()
+	fn(nil)
 }
 
 // SetWriteNotify implements [Stack.SetWriteNotify].
-func (g *GVisorStack) SetWriteNotify(notifier func()) {
+func (g *GVisorStack) SetWriteNotify(notifier func(buf []byte)) {
 	if g.prevNotify != nil {
 		g.Link.RemoveNotify(g.prevNotify)
 	}

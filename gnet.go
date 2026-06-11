@@ -17,6 +17,7 @@ package gnet
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"net"
 	"net/netip"
 	"runtime"
@@ -47,7 +48,7 @@ type NetworkDevice interface {
 type Stack interface {
 	// Configure sets the NIC ID, MAC address, IP prefix and gateway.
 	// Gateway may be invalid.
-	Configure(mac string, ip netip.Prefix, gw netip.Addr) error
+	Configure(mac net.HardwareAddr, ip netip.Prefix, gw netip.Addr) error
 	// HardwareAddress returns the MAC address of the NIC.
 	HardwareAddress() (net.HardwareAddr, error)
 	// EnableICMP registers an ICMP handler on the stack.
@@ -55,7 +56,8 @@ type Stack interface {
 	// Socket creates a network socket bound to laddr and connected to raddr.
 	Socket(ctx context.Context, network string, family, sotype int, laddr, raddr net.Addr) (c interface{}, err error)
 	// SetWriteNotify registers a callback invoked when outbound data is ready.
-	SetWriteNotify(cb func())
+	// The argument buffer if present can be used by the callback to fulfill data exchange.
+	SetWriteNotify(cb func(auxbuf []byte))
 	// WriteOutboundPacket dequeues one outbound packet into buf, returning bytes written.
 	WriteOutboundPacket(buf []byte) (int, error)
 	// RecvInboundPacket delivers an inbound packet to the stack.
@@ -112,7 +114,7 @@ func (iface *Interface) Init(addr string, mac string, gateway string) (err error
 
 	gwaddr, _ := netip.ParseAddr(gateway)
 
-	if err = iface.Stack.Configure(laddr.String(), pfx, gwaddr); err != nil {
+	if err = iface.Stack.Configure(laddr, pfx, gwaddr); err != nil {
 		return err
 	}
 
@@ -126,20 +128,21 @@ func (iface *Interface) Init(addr string, mac string, gateway string) (err error
 // Start begins processing of incoming packets, the function receives packets
 // through [NetworkDevice.Receive] and handles them through
 // [Stack.RecvInboundPacket], it should never return.
-func (iface *Interface) Start() {
+func (iface *Interface) Start(ctx context.Context) error {
 	buf := make([]byte, MTU+EthernetMaximumSize)
 
 	if iface.NetworkDevice == nil {
-		return
+		return errors.New("nil network device")
 	}
 
-	for {
+	for ctx.Err() == nil {
 		n, err := iface.rx(buf)
 
 		if err != nil || n == 0 {
 			runtime.Gosched()
 		}
 	}
+	return ctx.Err()
 }
 
 func (iface *Interface) tx(buf []byte) (n int, err error) {
@@ -174,6 +177,9 @@ func (iface *Interface) rx(buf []byte) (n int, err error) {
 	return
 }
 
-func (iface *Interface) notifyTx() {
-	iface.tx(make([]byte, MTU+EthernetMaximumSize))
+func (iface *Interface) notifyTx(buf []byte) {
+	if len(buf) == 0 {
+		buf = make([]byte, MTU+EthernetMaximumSize)
+	}
+	iface.tx(buf)
 }

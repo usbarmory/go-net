@@ -8,53 +8,134 @@ package gnet
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"net"
+	"net/netip"
+	"sync"
 	"syscall"
 	"testing"
+	"time"
+
+	"github.com/soypat/lneto/arp"
+	"github.com/soypat/lneto/ethernet"
 )
 
-const arpRequest = `ffffffffffffaabbccddeeff08060001080006040001aabbccddeeff0a0000010000000000000a000003`
-
 type DummyNIC struct {
-	buf []byte
+	mu  sync.Mutex
+	txd [][]byte
 }
 
 func (d *DummyNIC) Receive(buf []byte) (n int, err error) {
 	return
 }
 
-func (d *DummyNIC) Transmit(buf []byte) (err error) {
-	d.buf = buf
+func (d *DummyNIC) Transmit(buf []byte) error {
+	d.mu.Lock()
+	d.txd = append(d.txd, append([]byte(nil), buf...))
+	d.mu.Unlock()
 	fmt.Printf("tx (%d bytes): %x\n", len(buf), buf)
-	return
+	return nil
 }
 
-func TestGVisorStack(t *testing.T) {
+func (d *DummyNIC) HasFrame(want []byte) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, p := range d.txd {
+		if frameMatches(p, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// frameMatches reports whether got equals want, allowing trailing zero
+// bytes that some stacks pad to reach the 60-byte Ethernet minimum.
+func frameMatches(got, want []byte) bool {
+	if !bytes.HasPrefix(got, want) {
+		return false
+	}
+	for _, b := range got[len(want):] {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func (d *DummyNIC) Frames() [][]byte {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([][]byte, len(d.txd))
+	copy(out, d.txd)
+	return out
+}
+
+func TestStacks(t *testing.T) {
+	t.Run("arp gVisor", func(t *testing.T) {
+		start := time.Now()
+		testStackARP(t, NewGVisorStack(1))
+		elapsed := time.Since(start)
+		t.Log(t.Name(), "elapsed", elapsed)
+	})
+	t.Run("arp lneto", func(t *testing.T) {
+		start := time.Now()
+		testStackARP(t, NewLnetoStack(nil))
+		elapsed := time.Since(start)
+		t.Log(t.Name(), "elapsed", elapsed)
+	})
+}
+
+func testStackARP(t *testing.T, stack Stack) {
 	const (
 		addr    = "10.0.0.1/24"
 		gateway = "10.0.0.2"
 		mac     = "aa:bb:cc:dd:ee:ff"
 
-		remoteAddr = "10.0.0.3"
-		remotePort = 80
+		remoteAddr  = "10.0.0.3"
+		remotePort  = 80
+		maxFrameLen = 1518
 	)
-
-	payload, err := hex.DecodeString(arpRequest)
-
+	hwaddr, err := net.ParseMAC(mac)
 	if err != nil {
 		t.Fatal(err)
 	}
+	ip := netip.MustParsePrefix(addr)
+	rip := netip.MustParseAddr(remoteAddr)
 
-	iface := &Interface{
-		Stack: NewGVisorStack(1),
+	// Build the expected Ethernet+ARP request frame the stack should emit
+	// when resolving remoteAddr (which sits in the local /24 subnet).
+	var expectBuf [maxFrameLen]byte
+	efrm, err := ethernet.NewFrame(expectBuf[:])
+	if err != nil {
+		t.Fatal(err)
 	}
+	*efrm.DestinationHardwareAddr() = ethernet.BroadcastAddr()
+	*efrm.SourceHardwareAddr() = [6]byte(hwaddr)
+	efrm.SetEtherType(ethernet.TypeARP)
+	afrm, err := arp.NewFrame(efrm.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	afrm.SetHardware(1, 6)
+	afrm.SetProtocol(ethernet.TypeIPv4, 4)
+	afrm.SetOperation(arp.OpRequest)
+	senderHW, senderIP := afrm.Sender4()
+	targetHW, targetIP := afrm.Target4()
+	*senderHW = [6]byte(hwaddr)
+	*targetHW = [6]byte{} // unknown — to be filled in by ARP reply.
+	*senderIP = ip.Addr().As4()
+	*targetIP = rip.As4()
+	const ethHdrLen, arpV4Len = 14, 28
+	expected := expectBuf[:ethHdrLen+arpV4Len]
 
 	nic := &DummyNIC{}
+	iface := &Interface{
+		Stack:         stack,
+		NetworkDevice: nic,
+	}
 
-	if err := iface.Init(nic, addr, mac, gateway); err != nil {
-		panic(err)
+	if err := iface.Init(addr, mac, gateway); err != nil {
+		t.Fatal(err)
 	}
 
 	raddr := &net.TCPAddr{
@@ -62,13 +143,21 @@ func TestGVisorStack(t *testing.T) {
 		Port: remotePort,
 	}
 
-	_, err = iface.Stack.Socket(context.Background(), "tcp", syscall.AF_INET, syscall.SOCK_STREAM, nil, raddr)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	go iface.Start(ctx)
 
-	if !bytes.Equal(nic.buf, payload) {
-		t.Errorf("tx payload mismatch:\n  %x\n  %x", nic.buf, payload)
+	_, err = iface.Stack.Socket(ctx, "tcp", syscall.AF_INET, syscall.SOCK_STREAM, nil, raddr)
+	if err == nil {
+		t.Error("expected Socket to fail (no peer to answer ARP); got nil error")
+	} else {
+		t.Log("Socket returned (expected):", err)
 	}
 
-	if err.Error() != "connect tcp 10.0.0.3:80: no route to host" {
-		t.Errorf("unexpected error, %v", err.Error())
+	if !nic.HasFrame(expected) {
+		t.Errorf("expected ARP request not transmitted\n  want: %x", expected)
+		for i, f := range nic.Frames() {
+			t.Logf("  tx[%d]: %x", i, f)
+		}
 	}
 }
