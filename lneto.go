@@ -233,10 +233,10 @@ func (ls *LnetoStack) RecvInboundPacket(buf []byte) error {
 }
 
 func (ls *LnetoStack) resolveSetGateway(gw netip.Addr) (err error) {
-	blocking := ls.stack.StackBlocking(ls.backoff)
-	hw, err := blocking.DoResolveHardwareAddress6(gw, 5*time.Second)
+	blocking := ls.stack.StackRetrying(ls.backoff)
+	hw, err := blocking.DoResolveHardwareAddress6(gw, 4*time.Second, 3)
 	if err != nil {
-		fmt.Printf("failed to resolve hardware address for %s: %v\n", gw.String(), err)
+		fmt.Printf("failed to resolve gateway hardware address for %s: %v\n", gw.String(), err)
 		return err
 	}
 	ls.stack.SetGatewayHardwareAddr(hw)
