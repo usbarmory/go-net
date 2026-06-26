@@ -142,6 +142,7 @@ func (iface *Interface) Start(ctx context.Context) error {
 			runtime.Gosched()
 		}
 	}
+
 	return ctx.Err()
 }
 
@@ -181,5 +182,6 @@ func (iface *Interface) notifyTx(buf []byte) {
 	if len(buf) == 0 {
 		buf = make([]byte, MTU+EthernetMaximumSize)
 	}
+
 	iface.tx(buf)
 }

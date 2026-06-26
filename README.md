@@ -16,7 +16,8 @@ Support for the following pure Go network stacks is provided:
 
 The following packages provide compatible network devices:
 
-  * [enet](https://pkg.go.dev/github.com/usbarmory/tamago/soc/nxp/enet): NXP i.MX ENET Ethernet controllers
+  * [devcpu](https://pkg.go.dev/github.com/usbarmory/tamago/soc/microchip/devcpu): Microchip CPU port module
+  * [enet](https://pkg.go.dev/github.com/usbarmory/tamago/soc/nxp/enet): NXP i.MX ENET Ethernet controller
   * [uefi](https://pkg.go.dev/github.com/usbarmory/go-boot/uefi#SimpleNetwork): UEFI Simple Network
   * [usbnet](https://pkg.go.dev/github.com/usbarmory/go-net/imx-usb): Ethernet over NXP i.MX USB through tamago [nxp/usb](https://pkg.go.dev/github.com/usbarmory/tamago/soc/nxp/usb)
   * [vnet](https://pkg.go.dev/github.com/usbarmory/go-net/virtio): VirtIO network device through tamago [virtio](https://pkg.go.dev/github.com/usbarmory/tamago/kvm/virtio)
