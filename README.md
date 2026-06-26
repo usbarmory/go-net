@@ -18,6 +18,7 @@ The following packages provide compatible network devices:
 
   * [devcpu](https://pkg.go.dev/github.com/usbarmory/tamago/soc/microchip/devcpu): Microchip CPU port module
   * [enet](https://pkg.go.dev/github.com/usbarmory/tamago/soc/nxp/enet): NXP i.MX ENET Ethernet controller
+  * [gvnic](https://pkg.go.dev/github.com/usbarmory/tamago/kvm/gvnic): Google Compute Engine Virtual Ethernet
   * [uefi](https://pkg.go.dev/github.com/usbarmory/go-boot/uefi#SimpleNetwork): UEFI Simple Network
   * [usbnet](https://pkg.go.dev/github.com/usbarmory/go-net/imx-usb): Ethernet over NXP i.MX USB through tamago [nxp/usb](https://pkg.go.dev/github.com/usbarmory/tamago/soc/nxp/usb)
   * [vnet](https://pkg.go.dev/github.com/usbarmory/go-net/virtio): VirtIO network device through tamago [virtio](https://pkg.go.dev/github.com/usbarmory/tamago/kvm/virtio)
@@ -51,25 +52,12 @@ _ = iface.Init(nic, "10.0.0.1/24", "", "10.0.0.2")
 net.SocketFunc = iface.Stack.Socket
 ```
 
-UEFI
-----
+See the following projects for full integration examples of each supported network device:
 
-See [go-boot](https://github.com/usbarmory/go-boot/blob/main/cmd/net.go)
-for a full integration example with the UEFI Simple Network Protocol.
-
-VirtIO
-------
-
-See [tamago-sev-example](https://github.com/usbarmory/tamago-sev-example/blob/main/cmd/net_virtio.go) or
-[tamago-example](https://github.com/usbarmory/tamago-example/tree/master/network)
-for a full integration example.
-
-NXP i.MX ENET/USB
------------------
-
-See `mx6ullevk` and `imx8mpevk` (ENET) and `usbarmory` (USB) target support in
-[tamago-example](https://github.com/usbarmory/tamago-example/tree/master/network)
-for full integration examples.
+* i.MX ENET/USB: [tamago-example](https://github.com/usbarmory/tamago-example/tree/master/network) (`mx6ullevk`, `imx8mpevk`, `usbarmory` targets)
+* VirtIO:        [tamago-example](https://github.com/usbarmory/tamago-example/tree/master/network) (`cloud_hypervisor`, `firecracker`, `microvm` targets)
+* gVNIC:         [tamago-sev-example](https://github.com/usbarmory/tamago-sev-example/blob/main/cmd/net_gvnic.go)
+* UEFI:          [tamago-sev-example](https://github.com/usbarmory/tamago-sev-example/blob/main/cmd/net_gvnic.go), [go-boot](https://github.com/usbarmory/go-boot/blob/main/cmd/net.go)
 
 Authors
 =======
