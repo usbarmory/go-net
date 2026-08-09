@@ -109,7 +109,9 @@ func (iface *Interface) Init(addr string, mac string, gateway string) (err error
 	}
 
 	if iface.Stack == nil {
-		iface.Stack = NewGVisorStack(1)
+		if iface.Stack = newDefaultStack(); iface.Stack == nil {
+			return errors.New("no Stack set and default stack excluded by nodefaultstack build tag")
+		}
 	}
 
 	gwaddr, _ := netip.ParseAddr(gateway)

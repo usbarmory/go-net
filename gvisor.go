@@ -3,6 +3,8 @@
 // Use of this source code is governed by the license
 // that can be found in the LICENSE file.
 
+//go:build !nodefaultstack
+
 package gnet
 
 import (
@@ -306,3 +308,8 @@ func gvisorFullAddr(a string) (tcpip.FullAddress, error) {
 	addr := net.ParseIP(host)
 	return tcpip.FullAddress{Addr: tcpip.AddrFromSlice(addr.To4()), Port: uint16(p)}, nil
 }
+
+// newDefaultStack backs the [Interface.Init] nil-Stack fallback. The
+// unconditional reference from Init is what links gVisor into every binary using
+// [Interface]; the "nodefaultstack" tag excludes this file.
+func newDefaultStack() Stack { return NewGVisorStack(1) }
