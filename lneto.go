@@ -30,6 +30,8 @@ type LnetoConfig struct {
 	Hostname string
 	// MaxActiveTCPPorts is a heap-memory guardrail to limit number of simultaneous open TCP ports.
 	MaxActiveTCPPorts uint16
+	// MaxActiveUDPPorts is the same guardrail for UDP. Must be non-zero for a UDP socket to open.
+	MaxActiveUDPPorts uint16
 	// MaxListenerConns limits the amount of open [net.Listener] connections that can be established
 	// in simultaneous. Each newly allocated listener conn consumes 2*TCPBufferSize*MaxListenerConns so
 	// this can have drastic memory consumption impact.
@@ -55,6 +57,7 @@ func DefaultLnetoStackConfig() *LnetoConfig {
 	const tcpMaxSize = MTU - 20 - 20 // Do not consider IP+TCP headers.
 	return &LnetoConfig{
 		MaxActiveTCPPorts: 16,
+		MaxActiveUDPPorts: 4,
 		MaxListenerConns:  32,             // Careful with number, large memory impact.
 		TCPBufferSize:     3 * tcpMaxSize, // 3× seems to work good on cyw43439.
 		TCPQueueSize:      8,
@@ -97,6 +100,7 @@ func NewLnetoStack(cfg *LnetoConfig) *LnetoStack {
 	ls := &LnetoStack{
 		hostname:         cfg.Hostname,
 		maxTCPPorts:      cfg.MaxActiveTCPPorts,
+		maxUDPPorts:      cfg.MaxActiveUDPPorts,
 		maxListenerConns: cfg.MaxListenerConns,
 		tcpBufSize:       cfg.TCPBufferSize,
 		tcpQueueSize:     cfg.TCPQueueSize,
@@ -113,6 +117,7 @@ func NewLnetoStack(cfg *LnetoConfig) *LnetoStack {
 type LnetoStack struct {
 	hostname         string
 	maxTCPPorts      uint16
+	maxUDPPorts      uint16
 	maxListenerConns uint16
 	backoff          lneto.BackoffStrategy // Determine poll duration for blocking operations.
 	backoffirq       chan<- event
@@ -138,7 +143,7 @@ func (ls *LnetoStack) Configure(mac net.HardwareAddr, ip netip.Prefix, gw netip.
 	cfg := xnet.StackConfig{
 		RandSeed:          int64(binary.LittleEndian.Uint64(rnd[:])),
 		MaxActiveTCPPorts: ls.maxTCPPorts,
-		MaxActiveUDPPorts: 0, // Unsupported as of yet.
+		MaxActiveUDPPorts: ls.maxUDPPorts,
 		Hostname:          ls.hostname,
 		HardwareAddress:   [6]byte(mac),
 		MTU:               uint16(MTU),
