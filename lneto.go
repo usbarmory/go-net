@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/soypat/lneto"
+	"github.com/soypat/lneto/tcp"
+	"github.com/soypat/lneto/tcp/rto"
 	"github.com/soypat/lneto/x/xnet"
 )
 
@@ -47,6 +49,11 @@ type LnetoConfig struct {
 	NewBackoffTCP func() lneto.BackoffStrategy
 	// TCPQueueSize sets the number of packets that can be sent out and not be acknowledged before halting new packet tx.
 	TCPQueueSize int
+	// See [xnet.TCPPoolConfig.NewPolicy] field. A nil NewPolicyTCP results in basic TCP functionality which
+	// notably does no active retransmission.
+	NewPolicyTCP func() tcp.Policy
+	// Nanotime is used by TCP stack. See [xnet.TCPPoolConfig.NanoTime].
+	Nanotime func() int64
 }
 
 // DefaultLnetoStackConfig returns an [LnetoConfig] ready for use with [NewLnetoStack]
@@ -61,6 +68,15 @@ func DefaultLnetoStackConfig() *LnetoConfig {
 		// Backoffs are nil here, they are automatically set in NewLnetoStack.
 		BackoffStack:  nil,
 		NewBackoffTCP: nil,
+		NewPolicyTCP: func() tcp.Policy {
+			policy := new(rto.Timer)
+			err := policy.Configure(nanotime)
+			if err != nil {
+				panic(err.Error()) // unreachable.
+			}
+			return policy
+		},
+		Nanotime: nanotime,
 	}
 }
 
@@ -103,6 +119,8 @@ func NewLnetoStack(cfg *LnetoConfig) *LnetoStack {
 		backoff:          backoff,
 		backoffirq:       irq,
 		tcpbackoff:       cfg.NewBackoffTCP,
+		tcppolicy:        cfg.NewPolicyTCP,
+		nanotime:         cfg.Nanotime,
 	}
 	return ls
 }
@@ -117,6 +135,8 @@ type LnetoStack struct {
 	backoff          lneto.BackoffStrategy // Determine poll duration for blocking operations.
 	backoffirq       chan<- event
 	tcpbackoff       func() lneto.BackoffStrategy
+	tcppolicy        func() tcp.Policy
+	nanotime         func() int64
 	tcpBufSize       int // determine size of TCP rx/tx ring buffers.
 	tcpQueueSize     int
 	stack            xnet.StackAsync
@@ -170,8 +190,9 @@ func (ls *LnetoStack) Configure(mac net.HardwareAddr, ip netip.Prefix, gw netip.
 			RxBufSize:          ls.tcpBufSize,
 			EstablishedTimeout: 4 * time.Second,
 			ClosingTimeout:     2 * time.Second,
-			NanoTime:           nil, // Uses time.Now().UnixNano().
+			NanoTime:           ls.nanotime, // if nil uses time.Now().UnixNano(), equivalent to [nanotime]
 			NewBackoff:         ls.tcpbackoff,
+			NewPolicy:          ls.tcppolicy,
 		},
 	})
 
@@ -355,4 +376,8 @@ func defaultTCPBackoff(consecutiveBackoffs uint) time.Duration {
 
 func backoffYield(consecutiveBackoffs uint) time.Duration {
 	return lneto.BackoffFlagGosched
+}
+
+func nanotime() int64 {
+	return time.Now().UnixNano()
 }
