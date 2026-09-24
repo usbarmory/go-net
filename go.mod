@@ -3,7 +3,7 @@ module github.com/usbarmory/go-net
 go 1.26.4
 
 require (
-	github.com/soypat/lneto v0.2.0
+	github.com/soypat/lneto v0.3.2
 	github.com/usbarmory/tamago v1.26.4
 	gvisor.dev/gvisor v0.0.0-20250911055229-61a46406f068
 )
