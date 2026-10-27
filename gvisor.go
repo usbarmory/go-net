@@ -20,6 +20,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
+	"gvisor.dev/gvisor/pkg/tcpip/link/loopback"
 	"gvisor.dev/gvisor/pkg/tcpip/network/arp"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
@@ -119,6 +120,52 @@ func (g *GVisorStack) Configure(mac net.HardwareAddr, ip netip.Prefix, gw netip.
 	})
 
 	g.Stack.SetRouteTable(rt)
+
+	return nil
+}
+
+// EnableLoopback adds a loopback NIC with address 127.0.0.1/8, whose route
+// takes precedence over the existing ones. It can be invoked before or
+// without [GVisorStack.Configure], for a loopback only stack.
+func (g *GVisorStack) EnableLoopback() error {
+	if g.Stack == nil {
+		g.Stack = stack.New(DefaultStackOptions)
+	}
+
+	reserved := g.NICID
+
+	if reserved == 0 {
+		reserved = NICID
+	}
+
+	nicid := tcpip.NICID(1)
+
+	for nicid == reserved || g.Stack.HasNIC(nicid) {
+		nicid++
+	}
+
+	if err := g.Stack.CreateNIC(nicid, loopback.New()); err != nil {
+		return fmt.Errorf("%v", err)
+	}
+
+	protocolAddr := tcpip.ProtocolAddress{
+		Protocol: ipv4.ProtocolNumber,
+		AddressWithPrefix: tcpip.AddressWithPrefix{
+			Address:   tcpip.AddrFrom4([4]byte{127, 0, 0, 1}),
+			PrefixLen: 8,
+		},
+	}
+
+	if err := g.Stack.AddProtocolAddress(nicid, protocolAddr, stack.AddressProperties{}); err != nil {
+		return fmt.Errorf("%v", err)
+	}
+
+	rt := []tcpip.Route{{
+		Destination: protocolAddr.AddressWithPrefix.Subnet(),
+		NIC:         nicid,
+	}}
+
+	g.Stack.SetRouteTable(append(rt, g.Stack.GetRouteTable()...))
 
 	return nil
 }
