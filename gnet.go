@@ -75,6 +75,8 @@ type Interface struct {
 
 	// NetworkDevice represents a [NetworkDevice] instance.
 	NetworkDevice NetworkDevice
+
+	txBuf []byte
 }
 
 // Init initializes an [Interface] bridging its [Stack] and [NetworkDevice].
@@ -144,6 +146,40 @@ func (iface *Interface) Start(ctx context.Context) error {
 	}
 
 	return ctx.Err()
+}
+
+// Flush transmits all outbound packets queued by the [Stack] through
+// [NetworkDevice.Transmit], it returns the number of packets dequeued.
+func (iface *Interface) Flush() (n int, err error) {
+	if iface.NetworkDevice == nil {
+		return 0, errors.New("nil network device")
+	}
+
+	if iface.txBuf == nil {
+		iface.txBuf = make([]byte, MTU+EthernetMaximumSize)
+	}
+
+	for {
+		m, err := iface.Stack.WriteOutboundPacket(iface.txBuf)
+
+		if err != nil && iface.HandleStackErr != nil {
+			iface.HandleStackErr(err, true)
+		}
+
+		if err != nil || m == 0 {
+			return n, err
+		}
+
+		n++
+
+		if m < EthernetMinimumSize {
+			continue
+		}
+
+		if err = iface.NetworkDevice.Transmit(iface.txBuf[:m]); err != nil {
+			return n, err
+		}
+	}
 }
 
 func (iface *Interface) tx(buf []byte) (n int, err error) {
