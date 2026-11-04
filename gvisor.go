@@ -272,7 +272,10 @@ func (g *GVisorStack) WriteOutboundPacket(buf []byte) (int, error) {
 
 	if pkt = g.Link.Read(); pkt == nil {
 		return 0, nil
-	} else if pkt.Data().Size()+EthernetMinimumSize > len(buf) {
+	}
+	defer pkt.DecRef()
+
+	if pkt.Data().Size()+EthernetMinimumSize > len(buf) {
 		return 0, fmt.Errorf("outgoing packet too big (%d > %d)", pkt.Data().Size()+EthernetMinimumSize, len(buf))
 	}
 
@@ -313,6 +316,7 @@ func (g *GVisorStack) RecvInboundPacket(buf []byte) error {
 
 	copy(pkt.LinkHeader().Push(len(hdr)), hdr)
 	g.Link.InjectInbound(proto, pkt)
+	pkt.DecRef()
 
 	return nil
 }
